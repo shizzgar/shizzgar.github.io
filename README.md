@@ -1,2 +1,0 @@
-# shizzgar.github.io
-Pelican 
