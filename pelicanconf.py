@@ -4,7 +4,7 @@ from __future__ import unicode_literals
 import bulrush
 
 AUTHOR = 'Sh!zZ'
-SITENAME = 'CyPhySys'
+SITENAME = 'CYPHYSYSTEMS'
 # SITEURL = 'https://shizzgar.github.io/'
 
 
@@ -25,23 +25,23 @@ TIMEZONE = 'Europe/Moscow'
 DEFAULT_LANG = 'ru'
 
 # Feed generation is usually not desired when developing
-FEED_ALL_ATOM = None
-CATEGORY_FEED_ATOM = None
-TRANSLATION_FEED_ATOM = None
-AUTHOR_FEED_ATOM = None
-AUTHOR_FEED_RSS = None
+FEED_ALL_ATOM = 0
+CATEGORY_FEED_ATOM = 0
+TRANSLATION_FEED_ATOM = 0
+AUTHOR_FEED_ATOM = 0
+AUTHOR_FEED_RSS = 0
 
 # Blogroll
 LINKS = (('Pelican', 'http://getpelican.com/'),
          ('Python.org', 'http://python.org/'),
-         ('Jinja2', 'http://jinja.pocoo.org/'),)
-        #  ('MIIGAiK', 'http://miigaik.ru/'),)
+         ('Jinja2', 'http://jinja.pocoo.org/'),
+         ('MIIGAiK', 'http://miigaik.ru/'),)
 
 # Social widget
 SOCIAL = (('GitHub', 'https://github.com/shizzgar/'),
           ('INSTAGRAM', 'http://instagram.com/ugly_knight'),
-          ('VK', 'http://vk.com/shizzgar'),
-          ('MIIGAiK', 'http://miigaik.ru/'),)
+          ('VK', 'http://vk.com/shizzgar'),)
+        #   ('MIIGAiK', 'http://miigaik.ru/'),)
 
 DEFAULT_PAGINATION = 4
 
