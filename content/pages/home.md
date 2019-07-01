@@ -18,6 +18,5 @@ Summary: Сегодня мы попробуем взяться за возвра
 
 *Мы не подведем!*
 
-
-  [связаться]: contacts.html
-  [about]: about.html
+  [связаться]: sposoby-sviazi.html
+  [about]: o-nas.html

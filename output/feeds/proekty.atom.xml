@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>CyPhySys - Проекты</title><link href="/" rel="alternate"></link><link href="/feeds/proekty.atom.xml" rel="self"></link><id>/</id><updated>2011-11-11T23:55:00+04:00</updated><subtitle>CПИ БОЛЬШЕ, ЧЕМ УЧИШЬСЯ. УЧИСЬ БОЛЬШЕ ЧЕМ, ТУСИШЬ. ТУСИ СКОЛЬКО МОЖЕШЬ.</subtitle><entry><title>Project Two, The Second One</title><link href="/project-two-the-second-one.html" rel="alternate"></link><published>2011-11-11T22:00:00+04:00</published><updated>2011-11-11T23:55:00+04:00</updated><author><name>Sh!zZ</name></author><id>tag:None,2011-11-11:/project-two-the-second-one.html</id><summary type="html">&lt;p&gt;Some info about Project Two&lt;/p&gt;</summary><content type="html">&lt;p&gt;Some info about Project Two&lt;/p&gt;</content><category term="Project"></category><category term="Second"></category></entry><entry><title>Project One, The Best One</title><link href="/project-one-the-best-one.html" rel="alternate"></link><published>2010-10-10T22:00:00+04:00</published><updated>2010-10-10T23:55:00+04:00</updated><author><name>Sh!zZ</name></author><id>tag:None,2010-10-10:/project-one-the-best-one.html</id><summary type="html">&lt;!-- Status: --&gt;
+
+&lt;!-- Category:   Test --&gt;
+
+&lt;!-- Author:     Me --&gt;
+
+&lt;!-- Authors:    Me, My_Cat --&gt;
+
+&lt;!-- Slug:       test --&gt;
+
+&lt;p&gt;Some info about Project One
+&lt;!-- Template:   ??? --&gt;
+&lt;!-- Save_as:    html --&gt;
+&lt;!-- Url:        /page/ --&gt;&lt;/p&gt;</summary><content type="html">&lt;!-- Status: --&gt;
+
+&lt;!-- Category:   Test --&gt;
+
+&lt;!-- Author:     Me --&gt;
+
+&lt;!-- Authors:    Me, My_Cat --&gt;
+
+&lt;!-- Slug:       test --&gt;
+
+&lt;p&gt;Some info about Project One
+&lt;!-- Template:   ??? --&gt;
+&lt;!-- Save_as:    html --&gt;
+&lt;!-- Url:        /page/ --&gt;&lt;/p&gt;</content><category term="Project"></category><category term="Best"></category></entry></feed>
