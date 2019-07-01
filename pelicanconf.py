@@ -38,8 +38,9 @@ LINKS = (('Pelican', 'http://getpelican.com/'),
          ('MIIGAiK', 'http://miigaik.ru/'),)
 
 # Social widget
-SOCIAL = (('VK', 'http://vk.com/'),
-          ('INST', 'http://instagram.com/'),)
+SOCIAL = (('GitHub', 'https://github.com/shizzgar/'),
+          ('INSTAGRAM', 'http://instagram.com/ugly_knight'),
+          ('VK', 'http://vk.com/shizzgar'))
 
 DEFAULT_PAGINATION = 4
 
