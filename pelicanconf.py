@@ -34,18 +34,19 @@ AUTHOR_FEED_RSS = None
 # Blogroll
 LINKS = (('Pelican', 'http://getpelican.com/'),
          ('Python.org', 'http://python.org/'),
-         ('Jinja2', 'http://jinja.pocoo.org/'),
-         ('MIIGAiK', 'http://miigaik.ru/'),)
+         ('Jinja2', 'http://jinja.pocoo.org/'),)
+        #  ('MIIGAiK', 'http://miigaik.ru/'),)
 
 # Social widget
 SOCIAL = (('GitHub', 'https://github.com/shizzgar/'),
           ('INSTAGRAM', 'http://instagram.com/ugly_knight'),
-          ('VK', 'http://vk.com/shizzgar'))
+          ('VK', 'http://vk.com/shizzgar'),
+          ('MIIGAiK', 'http://miigaik.ru/'),)
 
 DEFAULT_PAGINATION = 4
 
 # Uncomment following line if you want document-relative URLs when developing
-# RELATIVE_URLS = True
+RELATIVE_URLS = True
 
 AUTHOR_SAVE_AS = ''
 AUTHOR_URL = ''
