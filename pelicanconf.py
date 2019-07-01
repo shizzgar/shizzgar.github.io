@@ -43,7 +43,7 @@ SOCIAL = (('GitHub', 'https://github.com/shizzgar/'),
           ('VK', 'http://vk.com/shizzgar'),)
         #   ('MIIGAiK', 'http://miigaik.ru/'),)
 
-DEFAULT_PAGINATION = 3
+DEFAULT_PAGINATION = 4
 
 # Uncomment following line if you want document-relative URLs when developing
 RELATIVE_URLS = True
@@ -54,7 +54,7 @@ YEAR_ARCHIVE_SAVE_AS = '{date:%Y}/index.html'
 
 
 STATIC_PATHS = [
-    'images',
+#     'images',
     'extra',
 ]
 
