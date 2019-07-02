@@ -54,7 +54,7 @@ YEAR_ARCHIVE_SAVE_AS = '{date:%Y}/index.html'
 
 
 STATIC_PATHS = [
-#     'images',
+    'images',
     'extra',
 ]
 
