@@ -43,7 +43,7 @@ SOCIAL = (('GitHub', 'https://github.com/shizzgar/'),
           ('VK', 'http://vk.com/shizzgar'),)
         #   ('MIIGAiK', 'http://miigaik.ru/'),)
 
-DEFAULT_PAGINATION = 4
+DEFAULT_PAGINATION = 3
 
 # Uncomment following line if you want document-relative URLs when developing
 RELATIVE_URLS = True
