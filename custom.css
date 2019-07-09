@@ -107,3 +107,16 @@ article a:hover > code {
     color: #477486; 
     
 }
+
+.is-primary {
+  background-color: #477486; 
+/* background-color: #00d1b2; */
+ color: #32515d;
+}
+
+.has-text-primary {
+  /* background-color: #477486;  */
+/* background-color: #00d1b2; */
+ color: #47748F!important;
+
+}
