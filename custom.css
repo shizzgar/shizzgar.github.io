@@ -33,10 +33,6 @@
   padding: 0;
 }
 
-.hero.is-primary a:not(.button):not(.dropdown-item):not(.tag).is-active,
-    .hero.is-primary a:not(.button):not(.dropdown-item):not(.tag):hover {
-  color: white;
-}
 
 .hero.is-primary a.navbar-item.is-active, .hero.is-primary a.navbar-item:hover {
  /* background-color: #00d1b2; */
@@ -110,13 +106,45 @@ article a:hover > code {
 
 .is-primary {
   background-color: #477486; 
-/* background-color: #00d1b2; */
- color: #32515d;
+  color: #32515d;
 }
 
 .has-text-primary {
   /* background-color: #477486;  */
 /* background-color: #00d1b2; */
- color: #47748F!important;
+  color: #477486!important;
+}
 
+a.has-text-primary:hover {
+  /* background-color: #477486;  */
+/* background-color: #00d1b2; */
+  color: #32515d!important;
+
+}
+
+a:hover {
+  /* background-color: #477486;  */
+/* background-color: #00d1b2; */
+  color: #32515d!important;
+
+}
+
+
+.button.is-primary:hover{
+  background-color: #32515d;  
+  color:  #477486;
+}
+
+.button.is-primary{
+  background-color: #477486; 
+  color: #32515d;
+}
+
+.is-primary{
+  background-color: #32515d;
+}
+
+.footer{
+  background-color: #506872;
+  color: #506872;
 }
