@@ -103,8 +103,10 @@ venv.bak/
 # mypy
 .mypy_cache/
 
-
+.output/
+.output
+output
 output/
-bulrush
-bulrush/
+bulrush_link
+output
 .vscode

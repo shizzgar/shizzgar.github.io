@@ -1,0 +1,27 @@
+<footer class="post-info">
+  <abbr class="published" title="{{ article.date.isoformat() }}">
+    Опубликовано <span class="is-info">{{ article.locale_date }}</span>
+    в разделе <a href="{{ SITEURL }}/{{ article.category.url }}">{{ article.category }}</a>
+  </abbr>
+  {% if article.modified %}
+    <br />
+    <abbr class="modified" title="{{ article.modified.isoformat() }}">
+      Обновлено {{ article.locale_modified }}
+    </abbr>
+  {% endif %}
+
+  {% if article.authors %}
+    <p class="author">
+      <em>{% for author in article.authors %}
+        {% if author.url %}
+          <a class="url fn" href="{{ SITEURL }}/{{ author.url }}">{{ author }}</a>
+        {% else %}
+          {{ author }}
+        {% endif %}
+      {% endfor %}</em>
+      {% include 'taglist.html' %}
+    </p>
+  {% endif %}
+  {% import 'translations.html' as translations with context %}
+  {{ translations.translations_for(article) }}
+</footer>

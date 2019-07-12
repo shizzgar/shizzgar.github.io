@@ -4,7 +4,7 @@ from __future__ import unicode_literals
 import bulrush
 
 AUTHOR = 'Sh!zZ'
-SITENAME = 'CYPHYSYSTEMS'
+SITENAME = 'КИБЕРФИЗИЧЕСКИЕ СИСТЕМЫ'
 # SITEURL = 'https://shizzgar.github.io/'
 
 
@@ -13,7 +13,7 @@ JINJA_ENVIRONMENT = bulrush.ENVIRONMENT
 JINJA_FILTERS = bulrush.FILTERS
 
 PLUGIN_PATHS = ['pelican-plugins']
-PLUGINS = ['assets']
+PLUGINS = ['assets', 'amtag_cloud']
 
 SITESUBTITLE = "CПИ БОЛЬШЕ, ЧЕМ УЧИШЬСЯ. УЧИСЬ БОЛЬШЕ ЧЕМ, ТУСИШЬ. ТУСИ СКОЛЬКО МОЖЕШЬ."
 
@@ -32,15 +32,17 @@ AUTHOR_FEED_ATOM = 0
 AUTHOR_FEED_RSS = 0
 
 # Blogroll
-LINKS = (('Pelican', 'http://getpelican.com/'),
-         ('Python.org', 'http://python.org/'),
-         ('Jinja2', 'http://jinja.pocoo.org/'),
+LINKS = (
+    # ('Pelican', 'http://getpelican.com/'),
+        #  ('Python.org', 'http://python.org/'),
+        #  ('Jinja2', 'http://jinja.pocoo.org/'),
          ('MIIGAiK', 'http://miigaik.ru/'),)
 
 # Social widget
-SOCIAL = (('GitHub', 'https://github.com/shizzgar/'),
-          ('INSTAGRAM', 'http://instagram.com/ugly_knight'),
-          ('VK', 'http://vk.com/shizzgar'),)
+SOCIAL = ()
+    # ('GitHub', 'https://github.com/shizzgar/'),)
+        #   ('INSTAGRAM', 'http://instagram.com/ugly_knight'),
+        #   ('VK', 'http://vk.com/shizzgar'),)
         #   ('MIIGAiK', 'http://miigaik.ru/'),)
 
 DEFAULT_PAGINATION = 3

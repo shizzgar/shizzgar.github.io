@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ SITENAME }} - Тэги{% endblock %}
+{% block content %}
+  <p class="subtitle">
+    <span class="icon is-small"><i class="fa fa-tags"></i></span>
+    Тэги для {{ SITENAME }}
+  </p>
+
+  <div class="menu">
+    <ul class="menu-list">
+    {% for tag, articles in tags|sort %}
+      <li><a href="{{ SITEURL }}/{{ tag.url }}">
+        {{ tag }} ({{ articles|count }})
+      </a></li>
+    {% endfor %}
+    </ul>
+  </div>
+{% endblock %}
