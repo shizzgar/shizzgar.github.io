@@ -29,20 +29,22 @@
         <div class="model-card">
           <div class="model-icon" aria-hidden="true">✳</div>
           <div class="model-copy"><strong>3D Coder</strong><span id="model-status" role="status" aria-live="polite">Модель не загружена</span></div>
-          <div class="model-actions"><button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button><button id="open-local" class="local-open-button" type="button" aria-controls="local-files" aria-expanded="false">С компьютера</button><a class="local-open-button download-primary" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/Qwen3.5-4B-3D-Coder-Q4_K_M.gguf?download=true" target="_blank" rel="noopener noreferrer">Скачать модель ↓</a></div>
+          <div class="model-actions"><button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button><button id="open-local" class="local-open-button" type="button" aria-controls="local-files" aria-expanded="false">С компьютера</button><button id="download-bundle" class="local-open-button" type="button">Скачать комплект ZIP ↓</button></div>
         </div>
         <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
+        <div class="bundle-feedback"><p id="bundle-result" role="status" aria-live="polite" hidden></p><button id="cancel-bundle" type="button" hidden>Отменить скачивание ZIP</button></div>
         <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Нужен WebGPU; совместимость проверяется.</p>
         <details class="hf-token-settings">
           <summary>Токен Hugging Face (необязательно)</summary>
           <label for="hf-token">Токен с правом чтения</label>
           <input id="hf-token" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-describedby="hf-token-note">
-          <p id="hf-token-note">Для загрузки в Forma: токен остаётся в этой вкладке и отправляется только на huggingface.co. Доступ может улучшиться, но ускорение не гарантировано. Прямое скачивание на компьютер не использует токен.</p>
+          <p id="hf-token-note">Для загрузки в Forma и комплекта ZIP: токен остаётся в этой вкладке и отправляется только на huggingface.co. Ускорение не гарантировано. Отдельные прямые ссылки токен не используют.</p>
         </details>
         <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p></div>
         <details class="download-files" id="download-files">
           <summary>Скачать файлы на компьютер</summary>
-          <p>Скачай файлы отдельно из Hugging Face. Они сохраняются на компьютер и не загружаются в Forma автоматически. Ход скачивания смотри в загрузках браузера.</p>
+          <p>Кнопка «Скачать комплект ZIP» сохраняет готовые части GGUF и компонент для картинок одним архивом. Потребуется скачать примерно 3,4 ГБ с Hugging Face; на диске может понадобиться около 7 ГБ для кэша и архива. После скачивания распакуй ZIP, чтобы выбрать части в Forma. Для выбора места сохранения нужен совместимый браузер, например актуальный Chrome или Edge. Докачка после обрыва зависит от браузера и источника файлов.</p>
+          <p>Также можно скачать файлы отдельно из Hugging Face. Ход этого скачивания виден в загрузках браузера.</p>
           <div class="download-actions">
             <a id="download-model-file" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/Qwen3.5-4B-3D-Coder-Q4_K_M.gguf?download=true" target="_blank" rel="noopener noreferrer">Модель Q4_K_M · 2,71 ГБ ↓</a>
             <a href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/mmproj-Qwen3.5-4B-BF16.gguf?download=true" target="_blank" rel="noopener noreferrer">Для картинок (mmproj) · 676 МБ ↓</a>

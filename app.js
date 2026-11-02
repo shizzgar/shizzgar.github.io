@@ -1,8 +1,9 @@
 import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, getModelState } from './inference.js';
 import { checkConnectivity } from './diagnostics.js';
+import { createBundle } from './bundle-download.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
 // The token is never stored by the app; discard any value restored by the browser.
 ui['hf-token'].value = '';
 let scene = '';
@@ -33,6 +34,7 @@ function setBusy(value) {
   ui['load-model'].disabled = value || getModelState().loaded;
   ui['open-local'].disabled = value;
   ui['load-local'].disabled = value;
+  ui['download-bundle'].disabled = value;
   ui['model-files'].disabled = value;
   ui['projector-file'].disabled = value;
   ui['hf-token'].disabled = value;
@@ -83,6 +85,55 @@ function finishProgress() {
   ui['progress-track'].classList.add('indeterminate');
   ui['model-progress-detail'].textContent = '';
 }
+ui['download-bundle'].addEventListener('click', async () => {
+  if (busy) return;
+  error('');
+  ui['bundle-result'].hidden = true;
+  if (typeof window.showSaveFilePicker !== 'function') {
+    ui['download-files'].open = true;
+    error('Этот браузер не поддерживает сохранение большого ZIP напрямую. Попробуй актуальный Chrome или Edge; ниже доступны отдельные файлы.');
+    return;
+  }
+  const token = ui['hf-token'].value.trim();
+  const previousStatus = ui['model-status'].textContent;
+  setBusy(true);
+  let controller;
+  try {
+    // Must run directly in the click handler to preserve browser user activation.
+    const handle = await window.showSaveFilePicker({
+      suggestedName: 'forma-3d-coder.zip',
+      types: [{ description: 'ZIP архив', accept: { 'application/zip': ['.zip'] } }],
+    });
+    startStage('Подготавливаем комплект…');
+    const writable = await handle.createWritable();
+    controller = new AbortController();
+    ui['cancel-bundle'].hidden = false;
+    ui['cancel-bundle'].onclick = () => controller.abort();
+    await createBundle({
+      writable, token, signal: controller.signal,
+      onProgress: data => {
+        const stage = data.stage ? String(data.stage) : 'Скачиваем комплект…';
+        if ((!data.loaded && !data.total) || stage.startsWith('Завершаем')) startStage(stage);
+        else { ui['model-status'].textContent = stage; updateProgress(data); }
+      },
+    });
+    ui['bundle-result'].textContent = 'ZIP сохранён. Распакуй его перед загрузкой частей в Forma.';
+    ui['bundle-result'].hidden = false;
+  } catch (e) {
+    if (e?.name === 'AbortError' || controller?.signal.aborted) {
+      ui['bundle-result'].textContent = 'Скачивание отменено.';
+      ui['bundle-result'].hidden = false;
+    } else {
+      error(e?.message || String(e));
+    }
+  } finally {
+    ui['cancel-bundle'].hidden = true;
+    ui['cancel-bundle'].onclick = null;
+    finishProgress();
+    ui['model-status'].textContent = previousStatus;
+    setBusy(false);
+  }
+});
 function extractHTML(output) {
   const match = output.match(/<!doctype\s+html[\s\S]*?<\/html\s*>/i) || output.match(/<html(?:\s[^>]*)?>[\s\S]*?<\/html\s*>/i);
   if (!match) throw new Error('Модель не вернула полный HTML-документ. Попробуй ещё раз с более простым запросом.');

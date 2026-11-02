@@ -39,3 +39,7 @@
 .hf-token-settings input { width: 100%; padding: 8px; border: 1px solid #485642; border-radius: 5px; background: #171d16; color: #f0f0e8; }
 .hf-token-settings input:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
 .hf-token-settings p { margin: 8px 0; line-height: 1.5; color: #a6b29e; }
+.bundle-feedback { margin: 0 2px; }
+.bundle-feedback p { margin: 8px 0 0; color: #c9dcb9; font-size: 11px; line-height: 1.5; }
+.bundle-feedback button { margin-top: 8px; border: 1px solid #66794d; background: transparent; color: #e1f7bc; border-radius: 6px; padding: 7px 10px; font-size: 10px; font-weight: 700; }
+.bundle-feedback button:hover { background: #303c27; }
