@@ -1,5 +1,6 @@
 // Progress-aware downloads using wllama 3.8.1's public CacheManager.
 // The stage progress covers file transfer only, never model/GPU initialization.
+import { downloadResumable } from './resumable-cache.js';
 
 export function modelShardUrls(instance, firstUrl) {
   const parse = instance?.modelManager?.constructor?.parseModelUrl;
@@ -16,7 +17,7 @@ export function modelShardUrls(instance, firstUrl) {
  * {loaded, total, cachedBytes, filesDone, filesTotal}; total=0 if unknown.
  * sizes optionally maps complete file URLs to trusted source metadata sizes.
  */
-export async function downloadFiles(instance, urls, { sizes = {}, onProgress = () => {}, signal, parallel = 3 } = {}) {
+export async function downloadFiles(instance, urls, { sizes = {}, onProgress = () => {}, signal, parallel = 3, headersForUrl = () => ({}) } = {}) {
   if (!Array.isArray(urls) || !urls.length || new Set(urls).size !== urls.length) {
     throw new Error('Некорректный набор файлов модели.');
   }
@@ -56,18 +57,37 @@ export async function downloadFiles(instance, urls, { sizes = {}, onProgress = (
     while (next < queue.length) {
       const state = queue[next++];
       if (controller.signal.aborted) throw new Error('Загрузка отменена.');
-      await cache.download(state.url, {
-        signal: controller.signal,
-        metadataAdditional: { originalURL: state.url },
-        progressCallback: ({loaded, total}) => {
+      let headers = headersForUrl(state.url) || {};
+      try {
+        const origin = new URL(state.url);
+        if (origin.protocol !== 'https:' || origin.hostname !== 'huggingface.co' || origin.port || origin.username || origin.password) headers = {};
+      } catch { headers = {}; }
+      const auth = headers.Authorization || '';
+      const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : '';
+      const progress = ({loaded, total, cachedBytes = 0}) => {
           if (controller.signal.aborted) return;
           if (!state.expected && Number.isFinite(total) && total > 0) state.expected = total;
           if (Number.isFinite(loaded) && loaded >= 0) state.loaded = loaded;
+          if (Number.isFinite(cachedBytes) && cachedBytes >= 0) state.cached = cachedBytes;
           send();
-        },
-      });
+      };
+      let blob;
+      let fromWllamaCache = false;
+      try {
+        blob = await downloadResumable(state.url, { expectedBytes: state.manifestSize, onProgress: progress, signal: controller.signal, hfToken: token });
+      } catch (error) {
+        if (error?.code !== 'UNSUPPORTED') throw error;
+        // Fall back to wllama on browsers without resumable OPFS support.
+        await cache.download(state.url, {
+          signal: controller.signal,
+          headers,
+          metadataAdditional: { originalURL: state.url },
+          progressCallback: progress,
+        });
+        blob = await cache.open(state.url);
+        fromWllamaCache = true;
+      }
       if (controller.signal.aborted) throw new Error('Загрузка отменена.');
-      const blob = await cache.open(state.url);
       if (!blob || !blob.size) throw new Error('Не удалось открыть скачанный файл модели.');
       if (state.expected && blob.size !== state.expected) throw new Error('Размер скачанного файла модели не совпадает с ожидаемым.');
       state.blob = blob;
@@ -77,7 +97,7 @@ export async function downloadFiles(instance, urls, { sizes = {}, onProgress = (
       // Wllama writes originalSize=0 if Content-Length is absent. Repair this
       // only if independently supplied metadata proves the downloaded size;
       // otherwise a truncated stream might be treated as a valid cache entry.
-      if (state.manifestSize && state.manifestSize === blob.size) {
+      if (fromWllamaCache && state.manifestSize && state.manifestSize === blob.size) {
         try {
           const name = await cache.getNameFromURL(state.url);
           const metadata = await cache.getMetadata(name);

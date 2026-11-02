@@ -32,3 +32,10 @@
 .download-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .download-actions a { display: inline-block; border: 1px solid #56664a; border-radius: 6px; background: #303c27; color: #e1f7bc; padding: 8px 10px; text-decoration: none; font-size: 10px; font-weight: 700; }
 .download-actions a:hover { background: #405333; }
+
+.hf-token-settings { margin: 9px 2px 0; color: #c9d4c1; font-size: 10px; }
+.hf-token-settings summary { cursor: pointer; color: #c9dcb9; font-weight: 700; }
+.hf-token-settings label { display: block; margin: 9px 0 4px; color: #d4dfcd; }
+.hf-token-settings input { width: 100%; padding: 8px; border: 1px solid #485642; border-radius: 5px; background: #171d16; color: #f0f0e8; }
+.hf-token-settings input:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+.hf-token-settings p { margin: 8px 0; line-height: 1.5; color: #a6b29e; }

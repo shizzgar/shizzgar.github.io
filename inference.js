@@ -20,6 +20,17 @@ let activeMode = 'remote';
 let localShards = [];
 let localProjector = null;
 
+// Never forward a Hugging Face credential to a custom host or CDN.
+function hfHeaders(url, token) {
+  if (!token) return {};
+  try {
+    if (new URL(url).origin === 'https://huggingface.co') {
+      return { Authorization: `Bearer ${token}` };
+    }
+  } catch { /* Invalid URLs receive no credential. */ }
+  return {};
+}
+
 function loadOptions() {
   return {
     n_ctx: 8192,
@@ -38,20 +49,22 @@ async function makeEngine() {
 }
 
 // Download each shard separately so progress includes partially cached models.
-async function textShards(instance, url, onProgress, sizes = {}) {
-  return downloadFiles(instance, modelShardUrls(instance, url), { sizes, onProgress });
+async function textShards(instance, url, onProgress, sizes = {}, token = '') {
+  return downloadFiles(instance, modelShardUrls(instance, url), { sizes, onProgress, headersForUrl: fileUrl => hfHeaders(fileUrl, token) });
 }
 
-async function projectorBlob(instance, url, onProgress) {
-  const [blob] = await downloadFiles(instance, [url], { onProgress });
+async function projectorBlob(instance, url, onProgress, token = '') {
+  const [blob] = await downloadFiles(instance, [url], { onProgress, headersForUrl: fileUrl => hfHeaders(fileUrl, token) });
   return blob;
 }
 
 // Resolve the first actual GGUF shard rather than guessing a filename. Wllama
 // automatically downloads the remaining numbered shards from that first URL.
-async function findModelUrl() {
-  const response = await fetch(`https://huggingface.co/api/models/${SPLIT_REPO}/tree/main?recursive=true`, {
-    headers: { Accept: 'application/json' },
+async function findModelUrl(token = '') {
+  const url = `https://huggingface.co/api/models/${SPLIT_REPO}/tree/main?recursive=true`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json', ...hfHeaders(url, token) },
+    credentials: 'omit',
   });
   if (!response.ok) throw new Error(`Не удалось получить список файлов модели (HTTP ${response.status}).`);
   const entries = await response.json();
@@ -71,7 +84,7 @@ async function findModelUrl() {
  * Load 3D Coder for text first. The image projector is loaded separately.
  * onProgress receives {loaded, total}; onStatus receives a displayable string.
  */
-export async function loadModel({ onProgress = () => {}, onStatus = () => {}, modelUrl = '', projectorUrl = PROJECTOR_URL } = {}) {
+export async function loadModel({ onProgress = () => {}, onStatus = () => {}, modelUrl = '', projectorUrl = PROJECTOR_URL, token = '' } = {}) {
   if (loading || running) throw new Error('Модель уже занята.');
   if (engine) return { vision: visionAvailable };
   if (!globalThis.isSecureContext || !navigator.gpu) {
@@ -83,12 +96,12 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     onStatus('Проверяем файлы модели…');
     // modelUrl can point to the first shard of another compatible mirror.
     // The community mirror is discovered at runtime and can disappear or change.
-    const modelSource = modelUrl ? { url: modelUrl, sizes: {} } : await findModelUrl();
+    const modelSource = modelUrl ? { url: modelUrl, sizes: {} } : await findModelUrl(token);
     const resolvedModelUrl = modelSource.url;
     onStatus('Загружаем движок…');
     instance = await makeEngine();
     onStatus('Загружаем модель для текста…');
-    const shards = await textShards(instance, resolvedModelUrl, onProgress, modelSource.sizes);
+    const shards = await textShards(instance, resolvedModelUrl, onProgress, modelSource.sizes, token);
     onStatus('Инициализируем модель…');
     await instance.loadModel(shards, loadOptions());
     visionAvailable = false;
@@ -158,7 +171,7 @@ export async function setLocalProjector(file) {
 }
 
 /** Download the projector only when needed and reload the model using cached shards. */
-export async function ensureVision({ onProgress = () => {}, onStatus = () => {} } = {}) {
+export async function ensureVision({ onProgress = () => {}, onStatus = () => {}, token = '' } = {}) {
   if (!engine) throw new Error('Сначала загрузи модель.');
   if (loading || running) throw new Error('Модель уже занята.');
   if (visionAvailable) return;
@@ -169,8 +182,8 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {} 
     // Keep the text engine usable if the projector download fails.
     onStatus(activeMode === 'local' ? 'Проверяем локальный компонент для картинок…' : 'Загружаем компонент для картинок…');
     if (activeMode === 'local' && !localProjector) throw new Error('Выбери локальный файл mmproj в разделе «Свои файлы модели».');
-    const projector = activeMode === 'local' ? localProjector : await projectorBlob(old, activeProjectorUrl, onProgress);
-    const shards = activeMode === 'local' ? localShards : (activeRemoteShards.length ? activeRemoteShards : await textShards(old, activeModelUrl, () => {}, activeModelSizes));
+    const projector = activeMode === 'local' ? localProjector : await projectorBlob(old, activeProjectorUrl, onProgress, token);
+    const shards = activeMode === 'local' ? localShards : (activeRemoteShards.length ? activeRemoteShards : await textShards(old, activeModelUrl, () => {}, activeModelSizes, token));
     onStatus('Перезапускаем модель для картинок…');
     engine = null;
     visionAvailable = false;

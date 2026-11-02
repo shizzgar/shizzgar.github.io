@@ -33,6 +33,12 @@
         </div>
         <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
         <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Нужен WebGPU; совместимость проверяется.</p>
+        <details class="hf-token-settings">
+          <summary>Токен Hugging Face (необязательно)</summary>
+          <label for="hf-token">Токен с правом чтения</label>
+          <input id="hf-token" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-describedby="hf-token-note">
+          <p id="hf-token-note">Для загрузки в Forma: токен остаётся в этой вкладке и отправляется только на huggingface.co. Доступ может улучшиться, но ускорение не гарантировано. Прямое скачивание на компьютер не использует токен.</p>
+        </details>
         <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p></div>
         <details class="download-files" id="download-files">
           <summary>Скачать файлы на компьютер</summary>

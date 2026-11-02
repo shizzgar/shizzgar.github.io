@@ -2,14 +2,18 @@ import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, g
 import { checkConnectivity } from './diagnostics.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','open-local','local-files','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
+// The token is never stored by the app; discard any value restored by the browser.
+ui['hf-token'].value = '';
 let scene = '';
 let image = null;
 let imageUrl = null;
 let busy = false;
 
 function error(message) {
-  ui['error-text'].textContent = message;
+  const token = ui['hf-token'].value.trim();
+  const safeMessage = String(message || '');
+  ui['error-text'].textContent = token ? safeMessage.split(token).join('[скрыто]') : safeMessage;
   ui['error-panel'].hidden = !message;
 }
 function appendMessage(label, message) {
@@ -31,6 +35,7 @@ function setBusy(value) {
   ui['load-local'].disabled = value;
   ui['model-files'].disabled = value;
   ui['projector-file'].disabled = value;
+  ui['hf-token'].disabled = value;
   ui['image-input'].disabled = value;
 }
 ui['open-local'].addEventListener('click', () => {
@@ -56,19 +61,20 @@ function startStage(text) {
   ui['progress-track'].classList.add('indeterminate');
   ui['model-progress-detail'].textContent = text;
 }
-function updateProgress({loaded, total}) {
+function updateProgress({loaded, total, cachedBytes = 0}) {
   const received = Number.isFinite(loaded) && loaded > 0 ? loaded : 0;
+  const cached = Number.isFinite(cachedBytes) && cachedBytes > 0 ? ` · сохранено ${formatBytes(cachedBytes)}` : '';
   const known = Number.isFinite(total) && total > 0 && received <= total;
   ui['progress-wrap'].hidden = false;
   if (known) {
     const percent = Math.min(100, received / total * 100);
     ui['model-progress'].value = percent;
     ui['progress-track'].classList.remove('indeterminate');
-    ui['model-progress-detail'].textContent = `${formatBytes(received)} из ${formatBytes(total)} · ${Math.floor(percent)}%`;
+    ui['model-progress-detail'].textContent = `${formatBytes(received)} из ${formatBytes(total)} · ${Math.floor(percent)}%${cached}`;
   } else {
     ui['model-progress'].removeAttribute('value');
     ui['progress-track'].classList.add('indeterminate');
-    ui['model-progress-detail'].textContent = received > 0 ? `Получено ${formatBytes(received)} · общий размер неизвестен` : 'Ожидание данных…';
+    ui['model-progress-detail'].textContent = received > 0 ? `Получено ${formatBytes(received)} · общий размер неизвестен${cached}` : 'Ожидание данных…';
   }
 }
 function finishProgress() {
@@ -105,6 +111,7 @@ ui['load-model'].addEventListener('click', async () => {
     await loadModel({
       onStatus: startStage,
       onProgress: updateProgress,
+      token: ui['hf-token'].value.trim(),
     });
     ui['model-status'].textContent = 'Готова для текста';
     ui['load-model'].textContent = 'Готово ✓';
@@ -163,7 +170,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
       }
       status.textContent = 'Загружаю компонент для картинок и перезапускаю модель…';
       startStage('Подготавливаем компонент для картинок…');
-      await ensureVision({onStatus: startStage, onProgress: updateProgress});
+      await ensureVision({onStatus: startStage, onProgress: updateProgress, token: ui['hf-token'].value.trim()});
       finishProgress();
     }
     const output = await generate({prompt, image, previousCode: scene,
