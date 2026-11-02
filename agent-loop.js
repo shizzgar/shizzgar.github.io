@@ -13,8 +13,58 @@ function aborted(signal) {
 }
 function extractHtml(text) {
   if (typeof text !== 'string') return null;
-  const match = text.match(/<!doctype\s+html[\s\S]*?<\/html\s*>/i) || text.match(/<html(?:\s[^>]*)?>[\s\S]*?<\/html\s*>/i);
-  return match?.[0] || null;
+  // Qwen can put reasoning in content, sometimes without an opening tag
+  // because the chat template already supplied it. Never execute that text.
+  let visible = '';
+  let insideDocument = false;
+  const markers = /<think\s*>|<\/think\s*>|<!doctype\s+html\b[^>]*>|<html(?:\s[^>]*)?>|<\/html\s*>/gi;
+  let position = 0;
+  let match;
+  while ((match = markers.exec(text))) {
+    const marker = match[0].toLowerCase();
+    if (!insideDocument && /^<think\s*>/.test(marker)) {
+      visible += text.slice(position, match.index);
+      const close = /<\/think\s*>/gi;
+      close.lastIndex = markers.lastIndex;
+      const end = close.exec(text);
+      if (!end) return null; // A truncated thought is not a final answer.
+      markers.lastIndex = position = close.lastIndex;
+      continue;
+    }
+    if (!insideDocument && /^<\/think\s*>/.test(marker)) {
+      // An orphan closing marker means the prefix is an implicit thought.
+      visible = '';
+      position = markers.lastIndex;
+      continue;
+    }
+    if (/^<!doctype|^<html/.test(marker)) insideDocument = true;
+    else if (/^<\/html/.test(marker)) insideDocument = false;
+  }
+  visible += text.slice(position);
+
+  // Mask fenced blocks of other languages, retaining HTML and unlabelled
+  // fences. Require an actual document boundary at the start of a line.
+  const lines = visible.split(/(?<=\n)/);
+  let fence = null;
+  const accepted = lines.map(line => {
+    const delimiter = line.match(/^\s*(`{3,}|~{3,})([^\n]*)/);
+    if (delimiter) {
+      if (!fence) fence = {character:delimiter[1][0], length:delimiter[1].length, html:/^\s*(?:html)?\s*$/i.test(delimiter[2])};
+      else if (delimiter[1][0] === fence.character && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      return line.replace(/[^\n]/g, ' ');
+    }
+    return fence && !fence.html ? line.replace(/[^\n]/g, ' ') : line;
+  }).join('');
+  const starts = [...accepted.matchAll(/^[ \t]*(?:<!doctype\s+html\b[^>]*>\s*)?<html(?:\s[^>]*)?>/gim)];
+  if (!starts.length) return null;
+  // The last document is the model's final revision. If it is incomplete,
+  // do not silently fall back to an earlier example or revision.
+  const start = starts.at(-1).index + starts.at(-1)[0].search(/\S/);
+  const tail = accepted.slice(start);
+  const closings = [...tail.matchAll(/<\/html\s*>/gi)];
+  if (!closings.length) return null;
+  const end = start + closings.at(-1).index + closings.at(-1)[0].length;
+  return visible.slice(start, end);
 }
 function cleanErrors(value, fallback) {
   const items = Array.isArray(value) ? value : value ? [value] : [];
@@ -28,7 +78,8 @@ function correctionRequest(original, diagnostics) {
 /**
  * Run a bounded autonomous scene-generation/validation loop.
  *
- * generate({prompt,image,previousCode,onToken,signal}) resolves to model output.
+ * generate({prompt,image,previousCode,onToken,signal}) resolves to a string or
+ * {text, finishReason}; a length stop permits a compact, fresh retry.
  * validate(html,{signal,attempt}) resolves to {ok,errors?,warnings?,evidence?,retryable?}.
  * onEvent receives {type,attempt,maxAttempts,...}, describing real stages.
  * initialErrors optionally requests a repair of previousCode on the first turn.
@@ -77,12 +128,13 @@ export async function runAgent({ prompt, image = null, previousCode = '', initia
       return {ok:false,html:null,lastHtml,lastOutput,attempts,errors:[message],reason:'generation_error'};
     }
     aborted(signal);
-    lastOutput = typeof output === 'string' ? output : '';
+    lastOutput = typeof output === 'string' ? output : typeof output?.text === 'string' ? output.text : '';
+    const truncated = typeof output === 'object' && output !== null && output.finishReason === 'length';
     const html = extractHtml(lastOutput);
     let result;
     if (!html) {
-      result = {ok:false, errors:['Модель не вернула полный HTML-документ с закрывающим тегом </html>.'], retryable:true};
-      previous = lastOutput;
+      result = {ok:false, errors:[truncated ? 'Ответ модели оборван по лимиту вывода: полный HTML-документ не получен. Создай более компактную сцену целиком.' : 'Модель не вернула полный HTML-документ с закрывающим тегом </html>.'], retryable:true};
+      previous = truncated ? '' : lastOutput;
     } else {
       lastHtml = html;
       onEvent({type:'validating', attempt, maxAttempts: attemptsLimit});

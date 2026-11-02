@@ -207,17 +207,20 @@ function agentGenerate(context) {
   return async args => {
     const call = trace.toolStart('Генерация модели', {prompt:args.prompt, previousCode:args.previousCode || '', image:args.image, thinking:ui['agent-thinking'].checked});
     try {
+      let finishReason = null;
       const output = await generate({
         ...args, thinking:ui['agent-thinking'].checked,
         onReasoning: delta => trace.event({type:'reasoning', attempt:context.attempt, maxAttempts:context.maxAttempts, delta}),
         onMetrics: metrics => {
+          if (typeof metrics?.finishReason === 'string') finishReason = metrics.finishReason;
           const timing = metrics?.timings || {};
           const usage = metrics?.usage || {};
           trace.setMetrics({tokensPerSecond:timing.predicted_per_second, generatedTokens:usage.completion_tokens ?? timing.predicted_n});
         },
       });
       trace.toolFinish(call, {output});
-      return output;
+      if (finishReason === 'length') trace.stage('Достигнут лимит вывода или контекста', 'Размышления и картинка тоже занимают контекст; при необходимости отключи размышления или упрости запрос.');
+      return {text:output, finishReason};
     } catch (err) {
       trace.toolFinish(call, {error:err});
       throw err;
@@ -265,9 +268,12 @@ function agentValidator({status, session, selected}) {
         }
         validation.visual = visual;
         if (visual.status === 'issue') {
-          validation.ok = false;
-          validation.retryable = true;
-          validation.errors = [...(validation.errors || []), `Визуальная проверка обнаружила возможную проблему: ${visual.description}`];
+          // The same generative model is not a verified visual judge. Keep a
+          // technically working scene and surface its subjective observation
+          // rather than discarding it or spending another generation attempt.
+          const warning = `Визуальная оценка предположила проблему: ${visual.description}. Проверь сцену самостоятельно.`;
+          validation.warnings = [...(validation.warnings || []), warning];
+          trace.stage('Замечание визуальной проверки', warning);
         } else if (visual.status === 'unknown') {
           validation.warnings = [...(validation.warnings || []), `Визуальная проверка не дала уверенного результата: ${visual.description}`];
         }
@@ -339,7 +345,9 @@ async function runLateRepair(session) {
     adoptCandidate(selected.frame, result.html);
     session.frame = selected.frame;
     selected.frame = null;
-    status.textContent = 'Ошибка исправлена и запуск сцены проверен.';
+    const warning = (result.validation.warnings || []).join(' ');
+    status.textContent = redact(warning ? `Ошибка исправлена; замечание проверки: ${warning}` : 'Ошибка исправлена и запуск сцены проверен.');
+    if (result.validation.visual?.status === 'issue') ui['preview-status'].textContent = 'Возможная проблема внешнего вида';
     trace.finish('Исправлено', 'done');
   } catch (err) {
     status.textContent = err?.name === 'AbortError' ? 'Исправление остановлено.' : 'Автоматически исправить сцену не удалось.';
@@ -498,7 +506,8 @@ ui['prompt-form'].addEventListener('submit', async event => {
     selected.frame = null;
     const warning = (result.validation.warnings || []).join(' ');
     const inspected = result.validation.visual?.status === 'ok';
-    status.textContent = warning ? `Сцена запущена. Замечание проверки: ${warning}` : inspected ? 'Сцена запущена и осмотрена моделью. Визуальная оценка приблизительная.' : 'Сцена запущена, ошибок за время проверки не обнаружено. Внешний вид и соответствие запросу автоматически не подтверждены.';
+    status.textContent = redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : inspected ? 'Сцена запущена и осмотрена моделью. Визуальная оценка приблизительная.' : 'Сцена запущена, ошибок за время проверки не обнаружено. Внешний вид и соответствие запросу автоматически не подтверждены.');
+    if (result.validation.visual?.status === 'issue') ui['preview-status'].textContent = 'Возможная проблема внешнего вида';
     trace.finish('Готово', 'done');
     ui['prompt-input'].value = '';
     clearImage();

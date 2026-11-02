@@ -273,7 +273,9 @@ export async function generate({ prompt, image = null, previousCode = '', onToke
       const delta = chunk.choices?.[0]?.delta?.content || '';
       if (delta) { result += delta; onToken(delta, result); }
     }
-    if (!result.trim()) throw new Error('Модель не вернула текст сцены.');
+    // Let the orchestrator handle a length-limited empty answer too: thinking
+    // can consume the budget before any scene text reaches the content field.
+    if (!result.trim() && finishReason !== 'length') throw new Error('Модель не вернула текст сцены.');
     return result;
   } finally {
     running = false;
