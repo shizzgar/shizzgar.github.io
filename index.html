@@ -31,7 +31,7 @@
           <div class="model-copy"><strong>3D Coder</strong><span id="model-status" role="status" aria-live="polite">Модель не загружена</span></div>
           <button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button>
         </div>
-        <div class="progress-wrap"><progress id="model-progress" max="100" value="0" aria-label="Загрузка модели" hidden></progress></div>
+        <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
         <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Нужен WebGPU; совместимость проверяется.</p>
         <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p></div>
         <details class="local-files">

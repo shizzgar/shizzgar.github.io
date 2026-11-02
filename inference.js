@@ -1,4 +1,5 @@
 import { prepareLocalModel, validateProjectorFile } from './local-model.js';
+import { downloadFiles, modelShardUrls } from './progress-download.js';
 // Browser-local GGUF inference, using Wllama's OpenAI-compatible v3 API.
 // Inference never leaves the device; runtime and weights are downloaded on load.
 const WLLAMA_VERSION = '3.8.1';
@@ -12,19 +13,20 @@ let loading = false;
 let running = false;
 let visionAvailable = false;
 let activeModelUrl = '';
+let activeModelSizes = {};
+let activeRemoteShards = [];
 let activeProjectorUrl = PROJECTOR_URL;
 let activeMode = 'remote';
 let localShards = [];
 let localProjector = null;
 
-function loadOptions(onProgress) {
+function loadOptions() {
   return {
     n_ctx: 8192,
     n_parallel: 1,
     n_threads: globalThis.crossOriginIsolated ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1,
     n_gpu_layers: 99999,
     jinja: true,
-    progressCallback: onProgress,
   };
 }
 
@@ -35,29 +37,13 @@ async function makeEngine() {
   return instance;
 }
 
-// Wllama 3.8.1 identifies cached models by the first shard URL, ignoring the
-// projector. Open only text shards so an old combined cache remains compatible.
-async function textShards(instance, url, onProgress) {
-  const model = await instance.modelManager.getModelOrDownload({ url }, { progressCallback: onProgress });
-  const files = model.files.filter(file => file.metadata.originalURL !== model.mmprojUrl);
-  const blobs = await Promise.all(files.map(file => instance.cacheManager.open(file.name)));
-  if (!blobs.length || blobs.some(blob => !blob)) throw new Error('Не удалось открыть сохранённые файлы модели.');
-  return blobs;
+// Download each shard separately so progress includes partially cached models.
+async function textShards(instance, url, onProgress, sizes = {}) {
+  return downloadFiles(instance, modelShardUrls(instance, url), { sizes, onProgress });
 }
 
 async function projectorBlob(instance, url, onProgress) {
-  const entries = await instance.cacheManager.list();
-  const cached = entries.find(file => file.metadata.originalURL === url && file.size > 0 && file.size === file.metadata.originalSize);
-  if (cached) {
-    const blob = await instance.cacheManager.open(cached.name);
-    if (blob && blob.size === cached.size) {
-      onProgress({loaded: blob.size, total: blob.size});
-      return blob;
-    }
-  }
-  await instance.cacheManager.download(url, { progressCallback: onProgress });
-  const blob = await instance.cacheManager.open(url);
-  if (!blob || !blob.size) throw new Error('Не удалось открыть компонент для картинок.');
+  const [blob] = await downloadFiles(instance, [url], { onProgress });
   return blob;
 }
 
@@ -76,7 +62,9 @@ async function findModelUrl() {
   // Some mirrors omit the quantization from a path when they contain only one model.
   const first = quantized[0] || (firstShards.length === 1 ? firstShards[0] : null);
   if (!first) throw new Error('Не найдена разделённая на части Q4_K_M модель. Проверьте доступность репозитория модели.');
-  return `https://huggingface.co/${SPLIT_REPO}/resolve/main/${first.path.split('/').map(encodeURIComponent).join('/')}`;
+  const fileUrl = path => `https://huggingface.co/${SPLIT_REPO}/resolve/main/${path.split('/').map(encodeURIComponent).join('/')}`;
+  const sizes = Object.fromEntries(files.filter(file => Number.isSafeInteger(file.size) && file.size > 0).map(file => [fileUrl(file.path), file.size]));
+  return { url: fileUrl(first.path), sizes };
 }
 
 /**
@@ -95,16 +83,19 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     onStatus('Проверяем файлы модели…');
     // modelUrl can point to the first shard of another compatible mirror.
     // The community mirror is discovered at runtime and can disappear or change.
-    const resolvedModelUrl = modelUrl || await findModelUrl();
+    const modelSource = modelUrl ? { url: modelUrl, sizes: {} } : await findModelUrl();
+    const resolvedModelUrl = modelSource.url;
     onStatus('Загружаем движок…');
     instance = await makeEngine();
     onStatus('Загружаем модель для текста…');
-    const shards = await textShards(instance, resolvedModelUrl, onProgress);
+    const shards = await textShards(instance, resolvedModelUrl, onProgress, modelSource.sizes);
     onStatus('Инициализируем модель…');
-    await instance.loadModel(shards, loadOptions(onProgress));
+    await instance.loadModel(shards, loadOptions());
     visionAvailable = false;
     engine = instance;
     activeModelUrl = resolvedModelUrl;
+    activeModelSizes = modelSource.sizes;
+    activeRemoteShards = shards;
     activeProjectorUrl = projectorUrl;
     activeMode = 'remote';
     localShards = [];
@@ -138,13 +129,14 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
       await old.exit();
     }
     onStatus('Инициализируем локальную модель…');
-    await instance.loadModel(files, loadOptions(() => {}));
+    await instance.loadModel(files, loadOptions());
     const hasVision = instance.supportInputModality('image');
     if (projector && !hasVision) throw new Error('Движок не распознал компонент для картинок.');
     engine = instance;
     instance = null;
     activeMode = 'local';
     activeModelUrl = '';
+    activeRemoteShards = [];
     localShards = shards;
     localProjector = projector;
     visionAvailable = Boolean(projector && hasVision);
@@ -178,14 +170,14 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {} 
     onStatus(activeMode === 'local' ? 'Проверяем локальный компонент для картинок…' : 'Загружаем компонент для картинок…');
     if (activeMode === 'local' && !localProjector) throw new Error('Выбери локальный файл mmproj в разделе «Свои файлы модели».');
     const projector = activeMode === 'local' ? localProjector : await projectorBlob(old, activeProjectorUrl, onProgress);
-    const shards = activeMode === 'local' ? localShards : await textShards(old, activeModelUrl, () => {});
+    const shards = activeMode === 'local' ? localShards : (activeRemoteShards.length ? activeRemoteShards : await textShards(old, activeModelUrl, () => {}, activeModelSizes));
     onStatus('Перезапускаем модель для картинок…');
     engine = null;
     visionAvailable = false;
     await old.exit();
     old = null;
     next = await makeEngine();
-    await next.loadModel([...shards, projector], loadOptions(onProgress));
+    await next.loadModel([...shards, projector], loadOptions());
     if (!next.supportInputModality('image')) throw new Error('Движок не распознал компонент для картинок.');
     engine = next;
     next = null;
@@ -253,5 +245,6 @@ export async function unloadModel() {
   visionAvailable = false;
   localShards = [];
   localProjector = null;
+  activeRemoteShards = [];
   if (old) await old.exit();
 }

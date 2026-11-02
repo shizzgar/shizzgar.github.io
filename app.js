@@ -2,7 +2,7 @@ import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, g
 import { checkConnectivity } from './diagnostics.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','model-status','model-progress','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
 let scene = '';
 let image = null;
 let imageUrl = null;
@@ -32,9 +32,40 @@ function setBusy(value) {
   ui['projector-file'].disabled = value;
   ui['image-input'].disabled = value;
 }
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 Б';
+  const units = ['Б', 'КиБ', 'МиБ', 'ГиБ'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / (1024 ** index);
+  return `${index === 0 ? Math.floor(value) : value.toFixed(1)} ${units[index]}`;
+}
+function startStage(text) {
+  ui['model-status'].textContent = text;
+  ui['progress-wrap'].hidden = false;
+  ui['model-progress'].removeAttribute('value');
+  ui['progress-track'].classList.add('indeterminate');
+  ui['model-progress-detail'].textContent = text;
+}
 function updateProgress({loaded, total}) {
-  if (total > 0) ui['model-progress'].value = Math.min(100, loaded / total * 100);
-  else ui['model-progress'].removeAttribute('value');
+  const received = Number.isFinite(loaded) && loaded > 0 ? loaded : 0;
+  const known = Number.isFinite(total) && total > 0 && received <= total;
+  ui['progress-wrap'].hidden = false;
+  if (known) {
+    const percent = Math.min(100, received / total * 100);
+    ui['model-progress'].value = percent;
+    ui['progress-track'].classList.remove('indeterminate');
+    ui['model-progress-detail'].textContent = `${formatBytes(received)} из ${formatBytes(total)} · ${Math.floor(percent)}%`;
+  } else {
+    ui['model-progress'].removeAttribute('value');
+    ui['progress-track'].classList.add('indeterminate');
+    ui['model-progress-detail'].textContent = received > 0 ? `Получено ${formatBytes(received)} · общий размер неизвестен` : 'Ожидание данных…';
+  }
+}
+function finishProgress() {
+  ui['progress-wrap'].hidden = true;
+  ui['model-progress'].removeAttribute('value');
+  ui['progress-track'].classList.add('indeterminate');
+  ui['model-progress-detail'].textContent = '';
 }
 function extractHTML(output) {
   const match = output.match(/<!doctype\s+html[\s\S]*?<\/html\s*>/i) || output.match(/<html(?:\s[^>]*)?>[\s\S]*?<\/html\s*>/i);
@@ -59,20 +90,19 @@ window.addEventListener('message', event => {
 });
 ui['load-model'].addEventListener('click', async () => {
   if (busy) return;
-  setBusy(true); error(''); ui['model-progress'].hidden = false;
-  ui['model-progress'].removeAttribute('value');
+  setBusy(true); error(''); startStage('Подготавливаем загрузку…');
   try {
     await loadModel({
-      onStatus: text => { ui['model-status'].textContent = text; },
+      onStatus: startStage,
       onProgress: updateProgress,
     });
     ui['model-status'].textContent = 'Готова для текста';
     ui['load-model'].textContent = 'Готово ✓';
-    ui['model-progress'].value = 100;
+    finishProgress();
     appendMessage('FORMA · МОДЕЛЬ ГОТОВА', 'Опиши сцену. Для первого запроса с картинкой понадобится дополнительная загрузка.');
   } catch (e) {
     ui['model-status'].textContent = 'Не удалось загрузить модель';
-    ui['model-progress'].hidden = true;
+    finishProgress();
     error(e?.message || String(e));
   } finally { setBusy(false); }
 });
@@ -89,17 +119,17 @@ ui['check-connectivity'].addEventListener('click', async () => {
 ui['load-local'].addEventListener('click', async () => {
   if (busy) return;
   setBusy(true); error('');
-  ui['model-progress'].hidden = false; ui['model-progress'].removeAttribute('value');
+  startStage('Подготавливаем файлы…');
   try {
     const result = await loadLocalModel(ui['model-files'].files, ui['projector-file'].files?.[0] || null, {
-      onStatus: text => { ui['model-status'].textContent = text; },
+      onStatus: startStage,
     });
-    ui['model-progress'].hidden = true;
+    finishProgress();
     ui['load-model'].textContent = 'Готово ✓';
     ui['model-status'].textContent = result.vision ? 'Локальная модель: текст и картинки' : 'Локальная модель: текст';
     appendMessage('FORMA · ЛОКАЛЬНАЯ МОДЕЛЬ', result.vision ? 'Можно описать сцену или приложить картинку.' : 'Можно создавать сцены по тексту. Для картинки выбери файл mmproj в разделе своих файлов.');
   } catch (e) {
-    ui['model-progress'].hidden = true;
+    finishProgress();
     if (!getModelState().loaded) { ui['model-status'].textContent = 'Модель не загружена'; ui['load-model'].textContent = 'Загрузить ↗'; }
     else { ui['model-status'].textContent = getModelState().vision ? 'Готова для текста и картинок' : 'Готова для текста'; }
     error(e?.message || String(e));
@@ -122,10 +152,9 @@ ui['prompt-form'].addEventListener('submit', async event => {
         await setLocalProjector(projector);
       }
       status.textContent = 'Загружаю компонент для картинок и перезапускаю модель…';
-      ui['model-progress'].hidden = false;
-      ui['model-progress'].removeAttribute('value');
-      await ensureVision({onStatus: text => { ui['model-status'].textContent = text; }, onProgress: updateProgress});
-      ui['model-progress'].value = 100;
+      startStage('Подготавливаем компонент для картинок…');
+      await ensureVision({onStatus: startStage, onProgress: updateProgress});
+      finishProgress();
     }
     const output = await generate({prompt, image, previousCode: scene,
       onToken: (_delta, full) => { status.textContent = `Генерирую код сцены… ${full.length} символов`; },
@@ -138,7 +167,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
   } catch (e) {
     status.textContent = 'Не получилось создать сцену.';
     ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
-    ui['model-progress'].hidden = true;
+    finishProgress();
     if (!getModelState().loaded) {
       ui['model-status'].textContent = 'Модель не загружена';
       ui['load-model'].textContent = 'Загрузить ↗';
