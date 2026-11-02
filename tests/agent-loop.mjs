@@ -64,5 +64,8 @@ const containsThink = '<html><body><script>const s="<think>literally kept</think
 assert.equal((await resultFor(containsThink)).result.html,containsThink);
 const truncatedInputs=[];
 const recovered=await runAgent({prompt:'Сложный город',generate:async input=>{truncatedInputs.push(input);return truncatedInputs.length===1?{text:'<html>'+('x'.repeat(25000)),finishReason:'length'}:{text:finalDoc,finishReason:'stop'}},validate:async()=>({ok:true})});
-assert.equal(recovered.ok,true);assert.equal(truncatedInputs.length,2);assert.equal(truncatedInputs[1].previousCode,'');assert.match(truncatedInputs[1].prompt,/лимиту вывода/);assert.match(truncatedInputs[1].prompt,/более компактную сцену/);
+assert.equal(recovered.ok,true);assert.equal(truncatedInputs.length,2);assert.equal(truncatedInputs[1].previousCode,'');assert.match(truncatedInputs[1].prompt,/лимиту генерации или контекста/);assert.match(truncatedInputs[1].prompt,/более компактную сцену/);
+const edits=[];
+await runAgent({prompt:'Сделай крышу красной',previousCode:html,generate:async input=>{edits.push(input);return edits.length===1?{text:'<html>truncated',finishReason:'length'}:finalDoc},validate:async()=>({ok:true})});
+assert.equal(edits[1].previousCode,html);
 console.log('PASS final answer extraction and truncated generation recovery');

@@ -133,8 +133,10 @@ export async function runAgent({ prompt, image = null, previousCode = '', initia
     const html = extractHtml(lastOutput);
     let result;
     if (!html) {
-      result = {ok:false, errors:[truncated ? 'Ответ модели оборван по лимиту вывода: полный HTML-документ не получен. Создай более компактную сцену целиком.' : 'Модель не вернула полный HTML-документ с закрывающим тегом </html>.'], retryable:true};
-      previous = truncated ? '' : lastOutput;
+      result = {ok:false, errors:[truncated ? 'Ответ модели оборван по лимиту генерации или контекста: полный HTML-документ не получен. Создай более компактную сцену целиком.' : 'Модель не вернула полный HTML-документ с закрывающим тегом </html>.'], retryable:true};
+      // Retain the last accepted scene for edit requests; never replace it with
+      // the truncated response or silently regenerate from a vague edit alone.
+      previous = truncated ? (typeof previousCode === 'string' ? previousCode : '') : lastOutput;
     } else {
       lastHtml = html;
       onEvent({type:'validating', attempt, maxAttempts: attemptsLimit});
