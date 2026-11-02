@@ -33,6 +33,10 @@ export function createProfiler(trace) {
       const buffers = bufferTotals.size
         ? [...bufferTotals].map(([name, mib]) => `${name}: ${mib.toFixed(1)} МиБ`).join(' · ') + ' (только буферы весов модели)'
         : 'Нет данных от движка';
+      // A CPU-only report is useful evidence but not proof that no other
+      // buffers exist: a worker may omit or suppress individual log lines.
+      const cpuBuffersWithoutWebGpu = !bufferTotals.has('WebGPU') &&
+        ((bufferTotals.get('CPU') || 0) > 0 || (bufferTotals.get('CPU_Mapped') || 0) > 0);
       const fallbackReason = modelState.fallbackReason || info.backend_fallback_reason;
       const cpuPlacement = fallbackReason === 'adapter-unavailable'
         ? 'CPU/WASM: не удалось получить WebGPU-адаптер'
@@ -43,6 +47,8 @@ export function createProfiler(trace) {
         ? 'При загрузке модели GPU или CPU будет выбран автоматически'
         : backend === 'cpu'
         ? cpuPlacement
+        : cpuBuffersWithoutWebGpu
+        ? 'Движок разместил веса в CPU-буфере; GPU-буферы в журнале не обнаружены'
         : reported
         ? `Движок сообщил ${count}/${total} слоёв; наличие GPU-буферов смотри отдельно`
         : 'Запрошен перенос всех слоёв на GPU; фактическое размещение не подтверждено';

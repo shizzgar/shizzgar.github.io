@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';
+const source=await readFile('./app.js','utf8');
+const fn=source.match(/function updateModelStatus\(\) \{[\s\S]*?\n\}/)?.[0];
+assert.ok(fn, 'status function exists');
+let state={loaded:true,mode:'remote',vision:false,backend:'gpu-requested'}, buffers=null;
+const ui={'model-status':{textContent:''}};
+const context=vm.createContext({ui,getModelState:()=>state,getLoadedContextInfo:()=>({model_buffers:buffers})});
+vm.runInContext(`${fn}\nthis.updateModelStatus=updateModelStatus;`,context);
+context.updateModelStatus();assert.match(ui['model-status'].textContent,/GPU запрошен/);
+buffers=[{backend:'CPU',mib:2572.9}];context.updateModelStatus();assert.match(ui['model-status'].textContent,/веса: CPU \(по журналу\)/);
+buffers=[{backend:'WebGPU',mib:2500}];context.updateModelStatus();assert.match(ui['model-status'].textContent,/веса: WebGPU \(по журналу\)/);
+buffers=[{backend:'WebGPU',mib:2200},{backend:'CPU',mib:200}];context.updateModelStatus();assert.match(ui['model-status'].textContent,/WebGPU \+ CPU/);
+buffers=[{backend:'CPU',mib:200},{backend:'WebGPU',mib:0}];context.updateModelStatus();assert.match(ui['model-status'].textContent,/GPU запрошен/);
+state.backend='cpu';buffers=null;context.updateModelStatus();assert.match(ui['model-status'].textContent,/ · CPU$/);
+state.loaded=false;ui['model-status'].textContent='предыдущий статус';context.updateModelStatus();assert.equal(ui['model-status'].textContent,'предыдущий статус');
+console.log('PASS model status from reported CPU, WebGPU, mixed, unknown and explicit CPU');

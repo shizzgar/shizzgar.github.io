@@ -1,5 +1,6 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, getModelState } from './inference.js';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, getModelState, getLoadedContextInfo } from './inference.js';
 import { checkConnectivity, checkWebGPU } from './diagnostics.js';
+import { probeInferenceWebGPU } from './webgpu-inference-probe.js';
 import { createBundle } from './bundle-download.js';
 import { runAgent } from './agent-loop.js';
 import { validateScene, disposeScene } from './sandbox-runner.js';
@@ -87,7 +88,17 @@ function updateModelStatus() {
   if (!state.loaded) return;
   const name = state.mode === 'local' ? 'Локальная модель' : 'Модель';
   const modality = state.vision ? 'текст и картинки' : 'текст';
-  const backend = state.backend === 'cpu' ? ' · CPU' : state.backend === 'gpu-requested' ? ' · GPU запрошен' : '';
+  let backend = state.backend === 'cpu' ? ' · CPU' : state.backend === 'gpu-requested' ? ' · GPU запрошен' : '';
+  if (state.backend === 'gpu-requested') {
+    const buffers = getLoadedContextInfo()?.model_buffers;
+    if (Array.isArray(buffers)) {
+      const hasGpu = buffers.some(item => item?.backend === 'WebGPU' && Number.isFinite(item.mib) && item.mib > 0);
+      const hasCpu = buffers.some(item => ['CPU', 'CPU_Mapped'].includes(item?.backend) && Number.isFinite(item.mib) && item.mib > 0);
+      const gpuWasReported = buffers.some(item => item?.backend === 'WebGPU');
+      if (hasGpu) backend = hasCpu ? ' · веса: WebGPU + CPU (по журналу)' : ' · веса: WebGPU (по журналу)';
+      else if (hasCpu && !gpuWasReported) backend = ' · веса: CPU (по журналу)';
+    }
+  }
   ui['model-status'].textContent = `${name}: ${modality}${backend}`;
 }
 function startStage(text) {
@@ -390,8 +401,18 @@ $('check-webgpu').addEventListener('click', async () => {
   output.hidden = false;
   output.textContent = 'Проверяю адаптер WebGPU…';
   try {
-    const result = await checkWebGPU();
-    output.textContent = result.detail;
+    const [availability, inferenceProbe] = await Promise.allSettled([checkWebGPU(), probeInferenceWebGPU()]);
+    const detail = availability.status === 'fulfilled' && typeof availability.value?.detail === 'string'
+      ? availability.value.detail : 'Не удалось проверить адаптер WebGPU.';
+    const describe = value => {
+      const states = { no_adapter:'адаптер недоступен', api_unavailable:'WebGPU API недоступен',
+        error:'не удалось проверить', timeout:'время ожидания истекло', unsupported:'проверка не поддерживается' };
+      if (value?.state !== 'available') return states[value?.state] || 'неизвестно';
+      const feature = value.shaderF16 === true ? 'доступен' : value.shaderF16 === false ? 'недоступен' : 'неизвестно';
+      return `адаптер доступен; shader-f16: ${feature}`;
+    };
+    const probe = inferenceProbe.status === 'fulfilled' ? inferenceProbe.value : null;
+    output.textContent = `${detail}\nОкно браузера: ${describe(probe?.main)}.\nТестовый worker: ${describe(probe?.worker)}.\nshader-f16 необходим WebGPU-бэкенду текущего движка. Тестовый worker не является worker модели: результаты не подтверждают загрузку весов на GPU.`;
   } catch {
     output.textContent = 'Не удалось проверить WebGPU. В Chrome открой chrome://gpu, в Edge — edge://gpu.';
   } finally { button.disabled = false; }

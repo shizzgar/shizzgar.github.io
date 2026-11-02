@@ -20,3 +20,9 @@ console.log('PASS model buffer allocations, WebGPU evidence, unknown values and 
 backend='cpu';info={n_ctx:8192,backend_fallback_reason:'gpu-init-failed'};await profiler.run();assert.match(state.backend,/инициализация модели с GPU не удалась/);assert.doesNotMatch(state.backend,/адаптер/);
 info={n_ctx:8192,backend_fallback_reason:'adapter-unavailable'};await profiler.run();assert.match(state.backend,/не удалось получить WebGPU-адаптер/);
 console.log('PASS accurate CPU fallback reason');
+backend='gpu-requested';info={n_ctx:8192,model_buffers:[{backend:'CPU',mib:2572.9}]};
+await profiler.run();assert.match(state.backend,/Движок разместил веса в CPU-буфере/);assert.match(state.backend,/GPU-буферы в журнале не обнаружены/);assert.match(state.modelBuffers,/CPU: 2572\.9 МиБ/);
+info={n_ctx:8192,model_buffers:[{backend:'CPU_Mapped',mib:100}]};await profiler.run();assert.match(state.backend,/GPU-буферы в журнале не обнаружены/);
+info={n_ctx:8192,model_buffers:[{backend:'CPU',mib:200},{backend:'WebGPU',mib:2200}]};await profiler.run();assert.doesNotMatch(state.backend,/GPU-буферы в журнале не обнаружены/);
+info={n_ctx:8192,model_buffers:[{backend:'CPU',mib:0}]};await profiler.run();assert.doesNotMatch(state.backend,/Движок разместил веса в CPU-буфере/);
+console.log('PASS truthful CPU buffer evidence without claiming complete logs');
