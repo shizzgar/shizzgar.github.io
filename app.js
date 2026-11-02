@@ -1,20 +1,28 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, getModelState } from './inference.js';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, inspectScene, getModelState } from './inference.js';
 import { checkConnectivity } from './diagnostics.js';
 import { createBundle } from './bundle-download.js';
+import { runAgent } from './agent-loop.js';
+import { validateScene, disposeScene } from './sandbox-runner.js';
+import { createTracePanel } from './trace-panel.js';
+import { createProfiler } from './profiling-ui.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
 // The token is never stored by the app; discard any value restored by the browser.
 ui['hf-token'].value = '';
+const secret = () => ui['hf-token'].value.trim();
+const redact = value => { const text = String(value ?? ''); const token = secret(); return token ? text.split(token).join('[скрыто]') : text; };
+const trace = createTracePanel(ui['trace-mount'], {redact, getSecret:secret});
+const profiler = createProfiler(trace);
 let scene = '';
 let image = null;
 let imageUrl = null;
 let busy = false;
+let agentController = null;
+let activeScene = null;
 
 function error(message) {
-  const token = ui['hf-token'].value.trim();
-  const safeMessage = String(message || '');
-  ui['error-text'].textContent = token ? safeMessage.split(token).join('[скрыто]') : safeMessage;
+  ui['error-text'].textContent = redact(message || '');
   ui['error-panel'].hidden = !message;
 }
 function appendMessage(label, message) {
@@ -38,8 +46,20 @@ function setBusy(value) {
   ui['model-files'].disabled = value;
   ui['projector-file'].disabled = value;
   ui['hf-token'].disabled = value;
+  ui['agent-thinking'].disabled = value;
   ui['image-input'].disabled = value;
+  ui['reset-scene'].disabled = value;
+  ui['copy-html'].disabled = value || !scene;
+  ui['download-html'].disabled = value || !scene;
+  if (!value) schedulePendingRepair();
 }
+ui['stop-agent'].addEventListener('click', () => {
+  if (!agentController) return;
+  agentController.abort();
+  ui['stop-agent'].disabled = true;
+  ui['stop-agent'].textContent = 'Останавливаю…';
+  trace.stage('Остановка запрошена', 'Если компонент модели ещё загружается, остановка произойдёт после текущего этапа.');
+});
 ui['open-local'].addEventListener('click', () => {
   if (busy) return;
   ui['local-files'].open = true;
@@ -134,27 +154,208 @@ ui['download-bundle'].addEventListener('click', async () => {
     setBusy(false);
   }
 });
-function extractHTML(output) {
-  const match = output.match(/<!doctype\s+html[\s\S]*?<\/html\s*>/i) || output.match(/<html(?:\s[^>]*)?>[\s\S]*?<\/html\s*>/i);
-  if (!match) throw new Error('Модель не вернула полный HTML-документ. Попробуй ещё раз с более простым запросом.');
-  return match[0];
+function createCandidate() {
+  // Keep candidates in the stage while invisible. Moving an iframe after it has
+  // run can reload it; opacity keeps its real viewport and running context.
+  const frame = document.createElement('iframe');
+  frame.title = 'Проверка 3D-сцены';
+  frame.setAttribute('aria-hidden', 'true');
+  frame.tabIndex = -1;
+  frame.style.opacity = '0';
+  frame.style.pointerEvents = 'none';
+  frame.style.zIndex = '2';
+  ui['preview-frame'].parentElement.appendChild(frame);
+  return frame;
 }
-function showScene(html) {
-  // Insert restrictions before the document is parsed in the sandbox.
-  const policy = "default-src 'none'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';";
-  const bridge = `addEventListener('error', e => parent.postMessage({type:'forma-preview-error', message:String(e.message || 'Ошибка загрузки сцены').slice(0,500)}, '*')); addEventListener('unhandledrejection', e => parent.postMessage({type:'forma-preview-error', message:String(e.reason?.message || e.reason).slice(0,500)}, '*'));`;
-  const prefix = `<meta http-equiv="Content-Security-Policy" content="${policy}"><script>${bridge}<\/script>`;
-  ui['preview-frame'].srcdoc = '<!doctype html>' + prefix + html.replace(/^\s*<!doctype\s+html[^>]*>/i, '');
-  ui['preview-frame'].hidden = false;
+function discardCandidate(frame) {
+  if (!frame) return;
+  disposeScene(frame);
+  frame.remove();
+}
+function adoptCandidate(frame, html) {
+  const old = ui['preview-frame'];
+  disposeScene(old);
+  old.remove();
+  frame.id = 'preview-frame';
+  frame.title = 'Предпросмотр сгенерированной 3D-сцены';
+  frame.removeAttribute('aria-hidden');
+  frame.removeAttribute('tabindex');
+  frame.style.opacity = '1';
+  frame.style.pointerEvents = '';
+  ui['preview-frame'] = frame;
   ui['preview-empty'].hidden = true;
-  ui['preview-status'].textContent = 'Сцена загружена · можно вращать';
-  ui['download-html'].disabled = false; ui['copy-html'].disabled = false;
+  scene = html;
+  ui['preview-status'].textContent = 'Проверен запуск сцены';
 }
-window.addEventListener('message', event => {
-  if (event.source !== ui['preview-frame'].contentWindow || !event.data || event.data.type !== 'forma-preview-error' || typeof event.data.message !== 'string') return;
-  ui['preview-status'].textContent = 'Ошибка в коде сцены';
-  error(`Ошибка сцены: ${event.data.message.slice(0, 500)}. Попроси модель исправить её следующим сообщением.`);
-});
+function agentEvents(status, context) {
+  return event => {
+    if (event.type === 'generating') { context.attempt = event.attempt; context.maxAttempts = event.maxAttempts; }
+    trace.event(event);
+    const attempt = `${event.attempt}/${event.maxAttempts}`;
+    if (event.type === 'generating') status.textContent = `Создаю сцену · попытка ${attempt}…`;
+    if (event.type === 'token') status.textContent = `Пишу код · попытка ${attempt} · ${event.length} символов`;
+    if (event.type === 'validating') status.textContent = `Запускаю сцену и проверяю ошибки · попытка ${attempt}…`;
+    if (event.type === 'repairing') status.textContent = `Исправляю ошибки · следующая попытка ${event.attempt + 1}/${event.maxAttempts}…`;
+    if (event.type === 'validation_failed') {
+      const token = ui['hf-token'].value.trim();
+      const diagnostic = (event.errors || []).join('; ').slice(0, 500);
+      appendMessage('FORMA · ПРОВЕРКА', token ? diagnostic.split(token).join('[скрыто]') : diagnostic);
+    }
+  };
+}
+function agentGenerate(context) {
+  return async args => {
+    const call = trace.toolStart('Генерация модели', {prompt:args.prompt, previousCode:args.previousCode || '', image:args.image, thinking:ui['agent-thinking'].checked});
+    try {
+      const output = await generate({
+        ...args, thinking:ui['agent-thinking'].checked,
+        onReasoning: delta => trace.event({type:'reasoning', attempt:context.attempt, maxAttempts:context.maxAttempts, delta}),
+        onMetrics: metrics => {
+          const timing = metrics?.timings || {};
+          const usage = metrics?.usage || {};
+          trace.setMetrics({tokensPerSecond:timing.predicted_per_second, generatedTokens:usage.completion_tokens ?? timing.predicted_n});
+        },
+      });
+      trace.toolFinish(call, {output});
+      return output;
+    } catch (err) {
+      trace.toolFinish(call, {error:err});
+      throw err;
+    }
+  };
+}
+function agentValidator({status, session, selected}) {
+  return async (html, {signal}) => {
+    const frame = createCandidate();
+    const lateIssues = [];
+    let contextLost = false;
+    const run = trace.toolStart('Запуск и проверка сцены', {html});
+    let runFinished = false;
+    try {
+      const canInspect = getModelState().vision;
+      const validation = await validateScene({iframe: frame, html, signal, captureImage: canInspect, onRuntimeError: detail => {
+        trace.stage('Ошибка во время работы сцены', detail.message);
+        if (detail.kind === 'webgl-context-lost') {
+          if (activeScene === session && session.frame === frame && ui['preview-frame'] === frame) {
+            ui['preview-status'].textContent = 'Потерян контекст WebGL';
+            error(`Браузер или устройство потеряло контекст WebGL: ${detail.message}`);
+          } else { contextLost = true; lateIssues.push(detail.message.slice(0, 500)); }
+          return;
+        }
+        if (activeScene !== session || session.frame !== frame || ui['preview-frame'] !== frame) {
+          lateIssues.push(detail.message.slice(0, 500));
+          return;
+        }
+        queueLateRepair(session, detail.message);
+      }});
+      trace.toolFinish(run, validation.ok
+        ? {output:{evidence:validation.evidence, warnings:validation.warnings}, screenshot:validation.screenshot}
+        : {error:(validation.errors || []).join('\n') || 'Проверка не прошла', screenshot:validation.screenshot});
+      runFinished = true;
+      if (validation.ok && canInspect && validation.screenshot) {
+        status.textContent = 'Осматриваю кадр сцены и сравниваю с запросом…';
+        const visionCall = trace.toolStart('Визуальная проверка', {prompt:session.prompt, frame:validation.screenshot, reference:session.reference});
+        let visual;
+        try {
+          visual = await inspectScene({prompt:session.prompt, frame: validation.screenshot, reference: session.reference, signal});
+          trace.toolFinish(visionCall, {output:visual, screenshot:validation.screenshot});
+        } catch (err) {
+          trace.toolFinish(visionCall, {error:err});
+          throw err;
+        }
+        validation.visual = visual;
+        if (visual.status === 'issue') {
+          validation.ok = false;
+          validation.retryable = true;
+          validation.errors = [...(validation.errors || []), `Визуальная проверка обнаружила возможную проблему: ${visual.description}`];
+        } else if (visual.status === 'unknown') {
+          validation.warnings = [...(validation.warnings || []), `Визуальная проверка не дала уверенного результата: ${visual.description}`];
+        }
+      } else if (validation.ok && !canInspect) {
+        validation.warnings = [...(validation.warnings || []), 'Визуальная проверка недоступна: компонент для картинок не загружен.'];
+      } else if (validation.ok && !validation.screenshot) {
+        validation.warnings = [...(validation.warnings || []), 'Визуальная проверка недоступна: не удалось получить кадр сцены.'];
+      }
+      if (lateIssues.length) {
+        validation.ok = false;
+        validation.retryable = !contextLost;
+        validation.errors = [...(validation.errors || []), ...lateIssues];
+      }
+      if (validation.ok) selected.frame = frame; else discardCandidate(frame);
+      return validation;
+    } catch (err) {
+      if (!runFinished) trace.toolFinish(run, {error:err});
+      discardCandidate(frame);
+      throw err;
+    }
+  };
+}
+function queueLateRepair(session, message) {
+  if (activeScene !== session || session.frame !== ui['preview-frame']) return;
+  if (session.lateRepairStarted) {
+    if (!busy && !session.failureReported) {
+      session.failureReported = true;
+      ui['preview-status'].textContent = 'Ошибка во время работы сцены';
+      error(`Сцена снова сообщила об ошибке после автоматического исправления: ${String(message || '').slice(0, 500)}`);
+    }
+    return;
+  }
+  if (!session.pendingError) session.pendingError = String(message || 'Ошибка выполнения сцены.').slice(0, 500);
+  schedulePendingRepair();
+}
+function schedulePendingRepair() {
+  const session = activeScene;
+  if (!session || !session.pendingError || session.lateRepairStarted || session.scheduled || busy) return;
+  session.scheduled = true;
+  setTimeout(() => {
+    session.scheduled = false;
+    if (busy || activeScene !== session || session.frame !== ui['preview-frame'] || session.lateRepairStarted || !session.pendingError) return;
+    void runLateRepair(session);
+  }, 0);
+}
+async function runLateRepair(session) {
+  if (busy || activeScene !== session || session.frame !== ui['preview-frame'] || session.lateRepairStarted) return;
+  const diagnostic = session.pendingError;
+  session.pendingError = null;
+  session.lateRepairStarted = true;
+  const oldFrame = session.frame;
+  const selected = {frame:null};
+  const traceContext = {attempt:0, maxAttempts:2};
+  const status = appendMessage('FORMA · ИСПРАВЛЯЮ', 'Сцена сообщила об ошибке после запуска. Исправляю её…');
+  ui['preview-status'].textContent = 'Исправляю ошибку сцены…';
+  error('');
+  setBusy(true);
+  trace.begin({preserve:true});
+  trace.stage('Поздняя ошибка', diagnostic);
+  agentController = new AbortController();
+  ui['stop-agent'].hidden = false;
+  ui['stop-agent'].disabled = false;
+  ui['stop-agent'].textContent = 'Остановить';
+  try {
+    const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:scene, initialErrors:[diagnostic], generate:agentGenerate(traceContext),
+      validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext), signal:agentController.signal, maxAttempts:2});
+    if (!result.ok) throw new Error((result.errors || []).join('; ') || 'Не удалось исправить ошибку.');
+    if (activeScene !== session || ui['preview-frame'] !== oldFrame || !selected.frame) throw new Error('Сцена изменилась во время исправления.');
+    adoptCandidate(selected.frame, result.html);
+    session.frame = selected.frame;
+    selected.frame = null;
+    status.textContent = 'Ошибка исправлена и запуск сцены проверен.';
+    trace.finish('Исправлено', 'done');
+  } catch (err) {
+    status.textContent = err?.name === 'AbortError' ? 'Исправление остановлено.' : 'Автоматически исправить сцену не удалось.';
+    if (err?.name !== 'AbortError') trace.stage('Не удалось исправить сцену', err?.message || String(err));
+    trace.finish(err?.name === 'AbortError' ? 'Остановлено' : 'Ошибка', err?.name === 'AbortError' ? 'done' : 'error');
+    if (activeScene === session && ui['preview-frame'] === oldFrame) {
+      ui['preview-status'].textContent = 'Ошибка во время работы сцены';
+      if (err?.name !== 'AbortError') error(`Не удалось исправить ошибку: ${err?.message || String(err)}`);
+    }
+  } finally {
+    discardCandidate(selected.frame);
+    agentController = null;
+    ui['stop-agent'].hidden = true;
+    setBusy(false);
+  }
+}
 ui['load-model'].addEventListener('click', async () => {
   if (busy) return;
   setBusy(true); error(''); startStage('Подготавливаем загрузку…');
@@ -164,6 +365,7 @@ ui['load-model'].addEventListener('click', async () => {
       onProgress: updateProgress,
       token: ui['hf-token'].value.trim(),
     });
+    profiler.invalidate();
     ui['model-status'].textContent = 'Готова для текста';
     ui['load-model'].textContent = 'Готово ✓';
     finishProgress();
@@ -192,6 +394,7 @@ ui['load-local'].addEventListener('click', async () => {
     const result = await loadLocalModel(ui['model-files'].files, ui['projector-file'].files?.[0] || null, {
       onStatus: startStage,
     });
+    profiler.invalidate();
     finishProgress();
     ui['load-model'].textContent = 'Готово ✓';
     ui['model-status'].textContent = result.vision ? 'Локальная модель: текст и картинки' : 'Локальная модель: текст';
@@ -203,6 +406,41 @@ ui['load-local'].addEventListener('click', async () => {
     error(e?.message || String(e));
   } finally { setBusy(false); }
 });
+async function prepareVisualInspection(status) {
+  const state = getModelState();
+  if (state.vision) return;
+  const local = state.mode === 'local';
+  const projector = local ? ui['projector-file'].files?.[0] : null;
+  if (local && !projector) {
+    appendMessage('FORMA · ПРОВЕРКА', 'Для визуальной проверки выбери локальный файл mmproj. Пока проверю только выполнение сцены.');
+    trace.stage('Визуальная проверка недоступна', 'Локальный mmproj не выбран; будет выполнена техническая проверка.');
+    return;
+  }
+  status.textContent = local ? 'Подключаю локальный компонент для визуальной проверки…' : 'Загружаю компонент для визуальной проверки (около 676 МБ)…';
+  startStage(local ? 'Подключаем локальный компонент…' : 'Загружаем компонент для визуальной проверки…');
+  const call = trace.toolStart('Подключение vision', {источник:local ? 'локальный файл' : 'Hugging Face', размер:local ? projector.size : 'около 676 МБ'});
+  try {
+    if (local) await setLocalProjector(projector);
+    await ensureVision({onStatus:text => {startStage(text); trace.stage(text);}, onProgress:updateProgress, token:ui['hf-token'].value.trim()});
+    trace.toolFinish(call, {output:'Компонент для визуальной проверки подключён.'});
+  } catch (err) {
+    trace.toolFinish(call, {error:err});
+    // A failed download leaves the text engine alive; a failed reinitialization
+    // can unload it, so restore it before continuing with technical checks.
+    if (!getModelState().loaded) {
+      startStage('Восстанавливаем текстовую модель…');
+      try {
+        if (local) await loadLocalModel(ui['model-files'].files, null, {onStatus:startStage});
+        else await loadModel({onStatus:startStage, onProgress:updateProgress, token:ui['hf-token'].value.trim()});
+        trace.stage('Текстовая модель восстановлена');
+      } catch {
+        throw new Error('Не удалось подключить визуальную проверку и восстановить модель. Повтори загрузку модели.');
+      }
+    }
+    appendMessage('FORMA · ПРОВЕРКА', 'Не удалось подключить визуальную проверку. Продолжу с проверкой выполнения и ошибок.');
+    trace.stage('Визуальная проверка недоступна', 'Продолжаю техническую проверку сцены.');
+  } finally { finishProgress(); }
+}
 ui['prompt-form'].addEventListener('submit', async event => {
   event.preventDefault();
   if (busy) return;
@@ -210,8 +448,17 @@ ui['prompt-form'].addEventListener('submit', async event => {
   if (!prompt) return;
   if (!getModelState().loaded) { error('Сначала загрузи модель кнопкой выше.'); return; }
   error(''); setBusy(true); appendMessage('ТЫ', prompt + (image ? ' · с референсом' : ''));
+  trace.begin({preserve:true});
+  trace.stage('Запрос пользователя', prompt);
   const status = appendMessage('FORMA · СОЗДАЮ', 'Готовлю сцену…');
   ui['preview-status'].textContent = 'Генерирую сцену…';
+  const session = {prompt, reference:image, frame:null, pendingError:null, lateRepairStarted:false, scheduled:false};
+  const selected = {frame:null};
+  const traceContext = {attempt:0, maxAttempts:3};
+  agentController = new AbortController();
+  ui['stop-agent'].hidden = false;
+  ui['stop-agent'].disabled = false;
+  ui['stop-agent'].textContent = 'Остановить';
   try {
     if (image && !getModelState().vision) {
       if (getModelState().mode === 'local') {
@@ -221,19 +468,42 @@ ui['prompt-form'].addEventListener('submit', async event => {
       }
       status.textContent = 'Загружаю компонент для картинок и перезапускаю модель…';
       startStage('Подготавливаем компонент для картинок…');
-      await ensureVision({onStatus: startStage, onProgress: updateProgress, token: ui['hf-token'].value.trim()});
+      const call = trace.toolStart('Подключение vision', {источник:getModelState().mode === 'local' ? 'локальный файл' : 'Hugging Face'});
+      try {
+        await ensureVision({onStatus:text => {startStage(text); trace.stage(text);}, onProgress: updateProgress, token: ui['hf-token'].value.trim()});
+        trace.toolFinish(call, {output:'Компонент для картинок подключён.'});
+      } catch (err) { trace.toolFinish(call, {error:err}); throw err; }
       finishProgress();
     }
-    const output = await generate({prompt, image, previousCode: scene,
-      onToken: (_delta, full) => { status.textContent = `Генерирую код сцены… ${full.length} символов`; },
+    if (agentController.signal.aborted) throw new DOMException('Создание сцены остановлено.', 'AbortError');
+    if (!image && !getModelState().vision) await prepareVisualInspection(status);
+    if (agentController.signal.aborted) throw new DOMException('Создание сцены остановлено.', 'AbortError');
+    await profiler.run(agentController.signal);
+    if (agentController.signal.aborted) throw new DOMException('Создание сцены остановлено.', 'AbortError');
+    const result = await runAgent({
+      prompt, image, previousCode: scene, generate:agentGenerate(traceContext),
+      signal: agentController.signal,
+      maxAttempts: 3,
+      onEvent: agentEvents(status,traceContext),
+      validate: agentValidator({status,session,selected}),
     });
-    const html = extractHTML(output);
-    scene = html; showScene(scene);
-    status.textContent = 'Готово! Можешь попросить изменить сцену или скачать HTML.';
+    if (!result.ok) {
+      const details = (result.errors || []).join('; ') || 'Проверка не завершилась успешно.';
+      throw new Error(`Не удалось получить рабочую сцену за ${result.attempts} попыток. ${details}`);
+    }
+    if (!selected.frame) throw new Error('Проверенная сцена недоступна для предпросмотра.');
+    adoptCandidate(selected.frame, result.html);
+    session.frame = selected.frame;
+    activeScene = session;
+    selected.frame = null;
+    const warning = (result.validation.warnings || []).join(' ');
+    const inspected = result.validation.visual?.status === 'ok';
+    status.textContent = warning ? `Сцена запущена. Замечание проверки: ${warning}` : inspected ? 'Сцена запущена и осмотрена моделью. Визуальная оценка приблизительная.' : 'Сцена запущена, ошибок за время проверки не обнаружено. Внешний вид и соответствие запросу автоматически не подтверждены.';
+    trace.finish('Готово', 'done');
     ui['prompt-input'].value = '';
     clearImage();
   } catch (e) {
-    status.textContent = 'Не получилось создать сцену.';
+    status.textContent = e?.name === 'AbortError' ? 'Создание сцены остановлено.' : 'Не получилось создать и проверить сцену.';
     ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
     finishProgress();
     if (!getModelState().loaded) {
@@ -242,8 +512,15 @@ ui['prompt-form'].addEventListener('submit', async event => {
     } else {
       ui['model-status'].textContent = getModelState().vision ? 'Готова для текста и картинок' : 'Готова для текста';
     }
-    error(e?.message || String(e));
-  } finally { setBusy(false); }
+    if (e?.name !== 'AbortError') error(e?.message || String(e));
+    if (e?.name !== 'AbortError') trace.stage('Не удалось завершить', e?.message || String(e));
+    trace.finish(e?.name === 'AbortError' ? 'Остановлено' : 'Ошибка', e?.name === 'AbortError' ? 'done' : 'error');
+  } finally {
+    discardCandidate(selected.frame);
+    agentController = null;
+    ui['stop-agent'].hidden = true;
+    setBusy(false);
+  }
 });
 function clearImage() {
   image = null; ui['image-input'].value = ''; ui['image-chip'].hidden = true;
@@ -261,6 +538,9 @@ ui['image-input'].addEventListener('change', event => {
 ui['remove-image'].addEventListener('click', clearImage);
 document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => { ui['prompt-input'].value = button.dataset.prompt; ui['prompt-input'].focus(); }));
 ui['reset-scene'].addEventListener('click', () => {
+  if (busy) return;
+  disposeScene(ui['preview-frame']);
+  activeScene = null;
   scene = ''; ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
   ui['preview-status'].textContent = 'Твоя сцена появится здесь'; ui['download-html'].disabled = true; ui['copy-html'].disabled = true; error('');
 });

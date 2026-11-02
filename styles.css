@@ -43,3 +43,8 @@
 .bundle-feedback p { margin: 8px 0 0; color: #c9dcb9; font-size: 11px; line-height: 1.5; }
 .bundle-feedback button { margin-top: 8px; border: 1px solid #66794d; background: transparent; color: #e1f7bc; border-radius: 6px; padding: 7px 10px; font-size: 10px; font-weight: 700; }
 .bundle-feedback button:hover { background: #303c27; }
+.generation-actions{display:flex;align-items:center;gap:7px}
+.stop-agent-button{border:1px solid #8c6857;background:#33241f;color:#f2c6ad;border-radius:6px;padding:10px 11px;font-size:11px;font-weight:700}
+.stop-agent-button:hover{background:#513429}
+.thinking-control{display:flex;align-items:center;gap:7px;margin-top:10px;color:#a6b29e;font-size:11px;cursor:pointer}
+.thinking-control input{accent-color:#bbdf91}

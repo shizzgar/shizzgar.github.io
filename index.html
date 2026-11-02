@@ -10,6 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./trace-panel.css">
 </head>
 <body>
   <div class="app-shell">
@@ -68,13 +69,15 @@
           <div class="ideas" aria-label="Примеры запросов"><p>ПОПРОБУЙ НАЧАТЬ С</p><button type="button" class="idea" data-prompt="Создай стилизованный маяк на скалистом острове, с волнами и тёплым светом.">Маяк на острове <span>↗</span></button><button type="button" class="idea" data-prompt="Создай маленький уютный домик в лесу в стиле low-poly, с деревьями и тропинкой.">Домик в лесу <span>↗</span></button><button type="button" class="idea" data-prompt="Создай забавного маленького робота из простых геометрических форм.">Маленький робот <span>↗</span></button></div>
         </div>
 
+        <div id="trace-mount"></div>
         <div id="error-panel" class="error-panel" role="alert" hidden><span aria-hidden="true">!</span><p id="error-text"></p></div>
 
         <form id="prompt-form" class="composer">
           <div id="image-chip" class="image-chip" hidden><img id="image-preview" alt="Прикреплённое изображение"><span id="image-name">Изображение</span><button id="remove-image" type="button" aria-label="Удалить изображение">×</button></div>
           <label class="sr-only" for="prompt-input">Опиши свою идею</label>
           <textarea id="prompt-input" rows="3" placeholder="Опиши свою идею..." required></textarea>
-          <div class="composer-actions"><div class="attachment"><label class="attach-button" for="image-input" title="Прикрепить референс"><span aria-hidden="true">＋</span> Референс</label><input id="image-input" type="file" accept="image/*" class="sr-only"><span class="attachment-hint">JPG, PNG, WEBP</span></div><button id="generate-button" class="send-button" type="submit" aria-label="Создать сцену">Создать <span aria-hidden="true">↗</span></button></div>
+          <div class="composer-actions"><div class="attachment"><label class="attach-button" for="image-input" title="Прикрепить референс"><span aria-hidden="true">＋</span> Референс</label><input id="image-input" type="file" accept="image/*" class="sr-only"><span class="attachment-hint">JPG, PNG, WEBP</span></div><div class="generation-actions"><button id="stop-agent" class="stop-agent-button" type="button" hidden>Остановить</button><button id="generate-button" class="send-button" type="submit" aria-label="Создать сцену">Создать <span aria-hidden="true">↗</span></button></div></div>
+          <label class="thinking-control"><input id="agent-thinking" type="checkbox" checked> Режим размышлений модели</label>
         </form>
         <p class="privacy-note"><span aria-hidden="true">◇</span> Модель работает на твоём устройстве</p>
       </section>
