@@ -1,4 +1,4 @@
-import { loadModel, generate, getModelState } from './inference.js';
+import { loadModel, ensureVision, generate, getModelState } from './inference.js';
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['load-model','model-status','model-progress','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene'].map(id => [id, $(id)]));
@@ -28,6 +28,10 @@ function setBusy(value) {
   ui['load-model'].disabled = value || getModelState().loaded;
   ui['image-input'].disabled = value;
 }
+function updateProgress({loaded, total}) {
+  if (total > 0) ui['model-progress'].value = Math.min(100, loaded / total * 100);
+  else ui['model-progress'].removeAttribute('value');
+}
 function extractHTML(output) {
   const match = output.match(/<!doctype\s+html[\s\S]*?<\/html\s*>/i) || output.match(/<html(?:\s[^>]*)?>[\s\S]*?<\/html\s*>/i);
   if (!match) throw new Error('Модель не вернула полный HTML-документ. Попробуй ещё раз с более простым запросом.');
@@ -56,15 +60,12 @@ ui['load-model'].addEventListener('click', async () => {
   try {
     await loadModel({
       onStatus: text => { ui['model-status'].textContent = text; },
-      onProgress: ({loaded, total}) => {
-        if (total > 0) ui['model-progress'].value = Math.min(100, loaded / total * 100);
-        else ui['model-progress'].removeAttribute('value');
-      },
+      onProgress: updateProgress,
     });
-    ui['model-status'].textContent = 'Готова к работе';
+    ui['model-status'].textContent = 'Готова для текста';
     ui['load-model'].textContent = 'Готово ✓';
     ui['model-progress'].value = 100;
-    appendMessage('FORMA · МОДЕЛЬ ГОТОВА', 'Опиши сцену или прикрепи референс.');
+    appendMessage('FORMA · МОДЕЛЬ ГОТОВА', 'Опиши сцену. Для первого запроса с картинкой понадобится дополнительная загрузка.');
   } catch (e) {
     ui['model-status'].textContent = 'Не удалось загрузить модель';
     ui['model-progress'].hidden = true;
@@ -81,6 +82,13 @@ ui['prompt-form'].addEventListener('submit', async event => {
   const status = appendMessage('FORMA · СОЗДАЮ', 'Готовлю сцену…');
   ui['preview-status'].textContent = 'Генерирую сцену…';
   try {
+    if (image && !getModelState().vision) {
+      status.textContent = 'Загружаю компонент для картинок и перезапускаю модель…';
+      ui['model-progress'].hidden = false;
+      ui['model-progress'].removeAttribute('value');
+      await ensureVision({onStatus: text => { ui['model-status'].textContent = text; }, onProgress: updateProgress});
+      ui['model-progress'].value = 100;
+    }
     const output = await generate({prompt, image, previousCode: scene,
       onToken: (_delta, full) => { status.textContent = `Генерирую код сцены… ${full.length} символов`; },
     });
@@ -92,6 +100,13 @@ ui['prompt-form'].addEventListener('submit', async event => {
   } catch (e) {
     status.textContent = 'Не получилось создать сцену.';
     ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
+    ui['model-progress'].hidden = true;
+    if (!getModelState().loaded) {
+      ui['model-status'].textContent = 'Модель не загружена';
+      ui['load-model'].textContent = 'Загрузить ↗';
+    } else {
+      ui['model-status'].textContent = getModelState().vision ? 'Готова для текста и картинок' : 'Готова для текста';
+    }
     error(e?.message || String(e));
   } finally { setBusy(false); }
 });

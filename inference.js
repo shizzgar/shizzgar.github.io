@@ -10,6 +10,52 @@ let engine = null;
 let loading = false;
 let running = false;
 let visionAvailable = false;
+let activeModelUrl = '';
+let activeProjectorUrl = PROJECTOR_URL;
+
+function loadOptions(onProgress) {
+  return {
+    n_ctx: 8192,
+    n_parallel: 1,
+    n_threads: globalThis.crossOriginIsolated ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1,
+    n_gpu_layers: 99999,
+    jinja: true,
+    progressCallback: onProgress,
+  };
+}
+
+async function makeEngine() {
+  const { Wllama } = await import(WLLAMA_ESM);
+  const instance = new Wllama({ default: WLLAMA_WASM }, { parallelDownloads: 3, allowOffline: true });
+  instance.setCompat('default', 'firefox_safari');
+  return instance;
+}
+
+// Wllama 3.8.1 identifies cached models by the first shard URL, ignoring the
+// projector. Open only text shards so an old combined cache remains compatible.
+async function textShards(instance, url, onProgress) {
+  const model = await instance.modelManager.getModelOrDownload({ url }, { progressCallback: onProgress });
+  const files = model.files.filter(file => file.metadata.originalURL !== model.mmprojUrl);
+  const blobs = await Promise.all(files.map(file => instance.cacheManager.open(file.name)));
+  if (!blobs.length || blobs.some(blob => !blob)) throw new Error('Не удалось открыть сохранённые файлы модели.');
+  return blobs;
+}
+
+async function projectorBlob(instance, url, onProgress) {
+  const entries = await instance.cacheManager.list();
+  const cached = entries.find(file => file.metadata.originalURL === url && file.size > 0 && file.size === file.metadata.originalSize);
+  if (cached) {
+    const blob = await instance.cacheManager.open(cached.name);
+    if (blob && blob.size === cached.size) {
+      onProgress({loaded: blob.size, total: blob.size});
+      return blob;
+    }
+  }
+  await instance.cacheManager.download(url, { progressCallback: onProgress });
+  const blob = await instance.cacheManager.open(url);
+  if (!blob || !blob.size) throw new Error('Не удалось открыть компонент для картинок.');
+  return blob;
+}
 
 // Resolve the first actual GGUF shard rather than guessing a filename. Wllama
 // automatically downloads the remaining numbered shards from that first URL.
@@ -30,7 +76,7 @@ async function findModelUrl() {
 }
 
 /**
- * Load 3D Coder and its image projector. Call only from a secure browser origin.
+ * Load 3D Coder for text first. The image projector is loaded separately.
  * onProgress receives {loaded, total}; onStatus receives a displayable string.
  */
 export async function loadModel({ onProgress = () => {}, onStatus = () => {}, modelUrl = '', projectorUrl = PROJECTOR_URL } = {}) {
@@ -47,27 +93,54 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     // The community mirror is discovered at runtime and can disappear or change.
     const resolvedModelUrl = modelUrl || await findModelUrl();
     onStatus('Загружаем движок…');
-    const { Wllama } = await import(WLLAMA_ESM);
-    instance = new Wllama({ default: WLLAMA_WASM }, { parallelDownloads: 3 });
-    instance.setCompat('default', 'firefox_safari');
-    onStatus('Загружаем модель и vision-компонент…');
-    await instance.loadModelFromUrl({ url: resolvedModelUrl, mmprojUrl: projectorUrl }, {
-      n_ctx: 8192,
-      n_parallel: 1,
-      // GitHub Pages does not send COOP/COEP headers, so explicitly use one CPU thread there.
-      n_threads: globalThis.crossOriginIsolated ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1,
-      n_gpu_layers: 99999,
-      jinja: true,
-      progressCallback: onProgress,
-    });
-    visionAvailable = instance.supportInputModality('image');
-    if (!visionAvailable) throw new Error('Модель загрузилась, но движок не распознал vision-компонент.');
+    instance = await makeEngine();
+    onStatus('Загружаем модель для текста…');
+    const shards = await textShards(instance, resolvedModelUrl, onProgress);
+    onStatus('Инициализируем модель…');
+    await instance.loadModel(shards, loadOptions(onProgress));
+    visionAvailable = false;
     engine = instance;
-    onStatus('Модель готова');
-    return { vision: true };
+    activeModelUrl = resolvedModelUrl;
+    activeProjectorUrl = projectorUrl;
+    onStatus('Модель готова для текста');
+    return { vision: false };
   } catch (error) {
     if (instance) await instance.exit().catch(() => {});
     throw error;
+  } finally {
+    loading = false;
+  }
+}
+
+/** Download the projector only when needed and reload the model using cached shards. */
+export async function ensureVision({ onProgress = () => {}, onStatus = () => {} } = {}) {
+  if (!engine) throw new Error('Сначала загрузи модель.');
+  if (loading || running) throw new Error('Модель уже занята.');
+  if (visionAvailable) return;
+  loading = true;
+  let next = null;
+  let old = engine;
+  try {
+    // Keep the text engine usable if the projector download fails.
+    onStatus('Загружаем компонент для картинок…');
+    const projector = await projectorBlob(old, activeProjectorUrl, onProgress);
+    const shards = await textShards(old, activeModelUrl, () => {});
+    onStatus('Перезапускаем модель для картинок…');
+    engine = null;
+    visionAvailable = false;
+    await old.exit();
+    old = null;
+    next = await makeEngine();
+    await next.loadModel([...shards, projector], loadOptions(onProgress));
+    if (!next.supportInputModality('image')) throw new Error('Движок не распознал компонент для картинок.');
+    engine = next;
+    next = null;
+    visionAvailable = true;
+    onStatus('Модель готова для текста и картинок');
+  } catch (err) {
+    if (next) await next.exit().catch(() => {});
+    const recovery = engine ? 'Текстовая модель осталась доступна; можно повторить попытку с картинкой.' : 'Нажми «Загрузить» ещё раз, чтобы восстановить текстовый режим.';
+    throw new Error(`Не удалось включить картинки: ${err?.message || err}. ${recovery}`);
   } finally {
     loading = false;
   }
