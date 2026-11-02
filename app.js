@@ -360,7 +360,10 @@ ui['load-model'].addEventListener('click', async () => {
       token: ui['hf-token'].value.trim(),
     });
     profiler.invalidate();
-    ui['model-status'].textContent = 'Готова для текста';
+    // Update hardware/offload information as soon as model loading finishes,
+    // without waiting for a generation or blocking the page on a probe.
+    void profiler.run().catch(() => {});
+    updateModelStatus();
     ui['load-model'].textContent = 'Готово ✓';
     finishProgress();
     appendMessage('FORMA · МОДЕЛЬ ГОТОВА', 'Опиши сцену. Для первого запроса с картинкой понадобится дополнительная загрузка.');
@@ -402,6 +405,7 @@ ui['load-local'].addEventListener('click', async () => {
       onStatus: startStage,
     });
     profiler.invalidate();
+    void profiler.run().catch(() => {});
     finishProgress();
     ui['load-model'].textContent = 'Готово ✓';
     updateModelStatus();
@@ -443,6 +447,8 @@ ui['prompt-form'].addEventListener('submit', async event => {
       const call = trace.toolStart('Подключение vision', {источник:getModelState().mode === 'local' ? 'локальный файл' : 'Hugging Face'});
       try {
         await ensureVision({onStatus:text => {startStage(text); trace.stage(text);}, onProgress: updateProgress, token: ui['hf-token'].value.trim()});
+        // Model reinitialization can change GPU/CPU placement.
+        profiler.invalidate();
         trace.toolFinish(call, {output:'Компонент для картинок подключён.'});
       } catch (err) { trace.toolFinish(call, {error:err}); throw err; }
       finishProgress();

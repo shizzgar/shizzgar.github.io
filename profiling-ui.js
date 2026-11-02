@@ -16,23 +16,43 @@ export function createProfiler(trace) {
       throwIfAborted(signal);
       cachedDevice = device;
       const loadedInfo = inference.getLoadedContextInfo();
-      const backend = inference.getModelState?.()?.backend ?? null;
+      const modelState = inference.getModelState?.() || {};
+      const backend = modelState.backend ?? null;
       const info = loadedInfo || {};
       const count = info.gpu_layers_offloaded;
       const total = info.gpu_layers_total;
       const reported = Number.isSafeInteger(count) && count >= 0 && Number.isSafeInteger(total) && total > 0 && count <= total;
+      // These numbers are parsed exclusively from the running engine's model
+      // buffer allocation logs, not from a WebGPU capability probe. They do not
+      // include KV cache, temporary buffers, or the rest of GPU memory.
+      const bufferTotals = new Map();
+      for (const item of Array.isArray(info.model_buffers) ? info.model_buffers : []) {
+        if (!['WebGPU', 'CPU', 'CPU_Mapped'].includes(item?.backend) || !Number.isFinite(item?.mib) || item.mib < 0 || item.mib > 10000000) continue;
+        bufferTotals.set(item.backend, (bufferTotals.get(item.backend) || 0) + item.mib);
+      }
+      const buffers = bufferTotals.size
+        ? [...bufferTotals].map(([name, mib]) => `${name}: ${mib.toFixed(1)} МиБ`).join(' · ') + ' (только буферы весов модели)'
+        : 'Нет данных от движка';
+      const fallbackReason = modelState.fallbackReason || info.backend_fallback_reason;
+      const cpuPlacement = fallbackReason === 'adapter-unavailable'
+        ? 'CPU/WASM: не удалось получить WebGPU-адаптер'
+        : fallbackReason === 'gpu-init-failed'
+        ? 'CPU/WASM: инициализация модели с GPU не удалась'
+        : 'CPU/WASM: модель загружена без выгрузки на GPU';
       const placement = !loadedInfo
         ? 'При загрузке модели GPU или CPU будет выбран автоматически'
         : backend === 'cpu'
-        ? 'CPU/WASM: WebGPU-адаптер недоступен; модель загружена без GPU'
+        ? cpuPlacement
         : reported
-        ? `Движок сообщил ${count}/${total} слоёв на GPU; запрошен перенос всех слоёв`
+        ? `Движок сообщил ${count}/${total} слоёв; наличие GPU-буферов смотри отдельно`
         : 'Запрошен перенос всех слоёв на GPU; фактическое размещение не подтверждено';
       trace.setDevice({
         gpu: device.adapter || (device.adapterAvailable ? 'имя не раскрыто браузером' : 'не обнаружен'),
         webglGpu: device.webglRenderer || (device.webglAvailable ? 'имя не раскрыто браузером' : 'недоступен'),
         webglNote: 'Адаптер WebGL может отличаться от используемого моделью через WebGPU.',
         backend: placement,
+        engineWebgpu: !loadedInfo ? 'Модель ещё не загружена' : info.webgpu_initialized === true ? 'Движок сообщил инициализацию WebGPU' : 'Нет подтверждения от движка',
+        modelBuffers: loadedInfo ? buffers : 'Модель ещё не загружена',
         vram: 'Свободная VRAM недоступна из браузера',
         cores: device.logicalCores ?? 'неизвестно',
         memory: device.deviceMemoryGiB ? `≈ ${device.deviceMemoryGiB} ГиБ` : 'неизвестно',

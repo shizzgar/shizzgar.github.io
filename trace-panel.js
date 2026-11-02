@@ -200,7 +200,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
   }
   function setDevice(data = {}) {
     machineContent.replaceChildren();
-    const labels = {browser:'Браузер',gpu:'Адаптер WebGPU при проверке',webglGpu:'Видеокарта при проверке WebGL',webglNote:'Примечание WebGL',backend:'Размещение модели',vram:'Видеопамять',cores:'Логических ядер',memory:'Оперативная память',webgpu:'Проверка WebGPU',threads:'Потоки CPU',context:'Контекст',batch:'Размер batch',profile:'Профиль',note:'Примечание'};
+    const labels = {browser:'Браузер',gpu:'Адаптер WebGPU при проверке',webglGpu:'Видеокарта при проверке WebGL',webglNote:'Примечание WebGL',backend:'Размещение модели',engineWebgpu:'WebGPU в движке',modelBuffers:'Буферы весов модели',vram:'Видеопамять',cores:'Логических ядер',memory:'Оперативная память',webgpu:'Проверка WebGPU',threads:'Потоки CPU',context:'Контекст',batch:'Размер batch',profile:'Профиль',note:'Примечание'};
     const pairs = Array.isArray(data) ? data.map(x => [x?.label, x?.value]) : Object.entries(data).map(([key,value]) => [labels[key] || key, value]);
     for (const [label,value] of pairs.slice(0, 20)) {
       if (!label) continue;

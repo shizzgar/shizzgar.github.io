@@ -28,6 +28,9 @@ let baselineConfig = {};
 // This is the requested backend, not a claim about actual GPU offload. Keep it
 // across vision and other worker reinitializations for the same loaded model.
 let activeGpuLayers = null;
+// Machine-readable reason only; never retain the potentially sensitive error
+// text or logs from a failed backend initialization.
+let activeFallbackReason = null;
 // Each engine gets its own bounded collector: data from a previous worker must
 // never be presented as the active model's actual offload.
 const offloadCollectors = new WeakMap();
@@ -103,7 +106,7 @@ async function makeEngine() {
 async function initializeWithCpuFallback(instance, files, gpuLayers, config, onStatus) {
   try {
     await instance.loadModel(files, loadOptions({...config, n_gpu_layers:gpuLayers}));
-    return {instance, gpuLayers};
+    return {instance, gpuLayers, fallbackReason:null};
   } catch (gpuError) {
     if (gpuLayers === 0 || gpuError?.name === 'AbortError') throw gpuError;
     await instance.exit().catch(() => {});
@@ -112,7 +115,7 @@ async function initializeWithCpuFallback(instance, files, gpuLayers, config, onS
     try {
       fallback = await makeEngine();
       await fallback.loadModel(files, loadOptions({...config, n_gpu_layers:0}));
-      return {instance:fallback, gpuLayers:0};
+      return {instance:fallback, gpuLayers:0, fallbackReason:'gpu-init-failed'};
     } catch (cpuError) {
       if (fallback) await fallback.exit().catch(() => {});
       if (cpuError?.name === 'AbortError') throw cpuError;
@@ -165,6 +168,8 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
   let instance;
   try {
     let gpuLayers = await chooseGpuLayers(onStatus);
+    const initialGpuLayers = gpuLayers;
+    let fallbackReason = null;
     onStatus('Проверяем файлы модели…');
     // modelUrl can point to the first shard of another compatible mirror.
     // The community mirror is discovered at runtime and can disappear or change.
@@ -175,7 +180,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     onStatus('Загружаем модель для текста…');
     const shards = await textShards(instance, resolvedModelUrl, onProgress, modelSource.sizes, token);
     onStatus('Инициализируем модель…');
-    ({instance, gpuLayers} = await initializeWithCpuFallback(instance, shards, gpuLayers, {}, onStatus));
+    ({instance, gpuLayers, fallbackReason} = await initializeWithCpuFallback(instance, shards, gpuLayers, {}, onStatus));
     visionAvailable = false;
     engine = instance;
     activeModelUrl = resolvedModelUrl;
@@ -188,6 +193,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     activeModelBlobs = [...shards];
     activeBlobsHaveVision = false;
     activeGpuLayers = gpuLayers;
+    activeFallbackReason = gpuLayers === 0 ? (fallbackReason || (initialGpuLayers === 0 ? 'adapter-unavailable' : null)) : null;
     rememberLoadedConfig(instance, {n_gpu_layers:gpuLayers});
     onStatus(gpuLayers === 0 ? 'Модель готова для текста на CPU; работа может быть медленной' : 'Модель готова для текста; запрошен GPU');
     return { vision: false, backend:gpuLayers === 0 ? 'cpu' : 'gpu-requested' };
@@ -206,6 +212,8 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
   let instance = null;
   try {
     let gpuLayers = await chooseGpuLayers(onStatus);
+    const initialGpuLayers = gpuLayers;
+    let fallbackReason = null;
     onStatus('Проверяем локальные файлы…');
     const { shards, projector, files } = await prepareLocalModel(modelFiles, projectorFile);
     // Validate input and resolve the runtime before discarding a working engine.
@@ -218,7 +226,7 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
       await old.exit();
     }
     onStatus('Инициализируем локальную модель…');
-    ({instance, gpuLayers} = await initializeWithCpuFallback(instance, files, gpuLayers, {}, onStatus));
+    ({instance, gpuLayers, fallbackReason} = await initializeWithCpuFallback(instance, files, gpuLayers, {}, onStatus));
     const hasVision = instance.supportInputModality('image');
     if (projector && !hasVision) throw new Error('Движок не распознал компонент для картинок.');
     engine = instance;
@@ -232,6 +240,7 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
     activeModelBlobs = [...files];
     activeBlobsHaveVision = visionAvailable;
     activeGpuLayers = gpuLayers;
+    activeFallbackReason = gpuLayers === 0 ? (fallbackReason || (initialGpuLayers === 0 ? 'adapter-unavailable' : null)) : null;
     rememberLoadedConfig(engine, {n_gpu_layers:gpuLayers});
     onStatus(gpuLayers === 0 ? 'Локальная модель готова на CPU; работа может быть медленной' : (visionAvailable ? 'Локальная модель готова для текста и картинок' : 'Локальная модель готова для текста'));
     return { vision: visionAvailable, backend:gpuLayers === 0 ? 'cpu' : 'gpu-requested' };
@@ -271,11 +280,13 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {},
     old = null;
     next = await makeEngine();
     let gpuLayers = activeGpuLayers ?? 99999;
-    ({instance:next, gpuLayers} = await initializeWithCpuFallback(next, [...shards, projector], gpuLayers, activeConfig, onStatus));
+    let fallbackReason = null;
+    ({instance:next, gpuLayers, fallbackReason} = await initializeWithCpuFallback(next, [...shards, projector], gpuLayers, activeConfig, onStatus));
     if (!next.supportInputModality('image')) throw new Error('Движок не распознал компонент для картинок.');
     engine = next;
     next = null;
     activeGpuLayers = gpuLayers;
+    activeFallbackReason = gpuLayers === 0 ? (fallbackReason || activeFallbackReason) : null;
     activeConfig = {...activeConfig, n_gpu_layers:gpuLayers};
     visionAvailable = true;
     activeModelBlobs = [...shards, projector];
@@ -418,7 +429,7 @@ export async function inspectScene({ prompt, frame, reference = null, signal } =
 }
 
 export function getModelState() {
-  return { loaded: Boolean(engine), loading, running, vision: visionAvailable, mode: activeMode, backend:engine ? (activeGpuLayers === 0 ? 'cpu' : 'gpu-requested') : null };
+  return { loaded: Boolean(engine), loading, running, vision: visionAvailable, mode: activeMode, backend:engine ? (activeGpuLayers === 0 ? 'cpu' : 'gpu-requested') : null, fallbackReason:engine ? activeFallbackReason : null };
 }
 
 /** Only expose capability numbers, never full model metadata or prompts. */
@@ -445,6 +456,14 @@ export function getLoadedContextInfo() {
     out.gpu_layers_offloaded = offload.gpuLayers;
     out.gpu_layers_total = offload.totalLayers;
   }
+  const diagnostics = offloadCollectors.get(engine)?.getDiagnostics?.();
+  if (diagnostics?.webgpuInitialized === true) out.webgpu_initialized = true;
+  if (Array.isArray(diagnostics?.modelBuffers) && diagnostics.modelBuffers.length) {
+    out.model_buffers = diagnostics.modelBuffers
+      .filter(item => ['WebGPU','CPU','CPU_Mapped'].includes(item?.backend) && Number.isFinite(item?.mib) && item.mib >= 0 && item.mib <= 1000000)
+      .slice(0, 16).map(item => ({backend:item.backend, mib:item.mib}));
+  }
+  if (activeFallbackReason) out.backend_fallback_reason = activeFallbackReason;
   return out;
 }
 
@@ -549,5 +568,6 @@ export async function unloadModel() {
   activeConfig = {};
   baselineConfig = {};
   activeGpuLayers = null;
+  activeFallbackReason = null;
   if (old) await old.exit();
 }
