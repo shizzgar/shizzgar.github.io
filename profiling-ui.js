@@ -1,5 +1,5 @@
 import { profileDevice } from './benchmark.js';
-import { getLoadedContextInfo } from './inference.js';
+import * as inference from './inference.js';
 
 // Profile available device capabilities without running a synthetic benchmark
 // or reinitializing the model. Measurements come from ordinary generation.
@@ -15,13 +15,16 @@ export function createProfiler(trace) {
       const device = cachedDevice || await profileDevice();
       throwIfAborted(signal);
       cachedDevice = device;
-      const loadedInfo = getLoadedContextInfo();
+      const loadedInfo = inference.getLoadedContextInfo();
+      const backend = inference.getModelState?.()?.backend ?? null;
       const info = loadedInfo || {};
       const count = info.gpu_layers_offloaded;
       const total = info.gpu_layers_total;
       const reported = Number.isSafeInteger(count) && count >= 0 && Number.isSafeInteger(total) && total > 0 && count <= total;
       const placement = !loadedInfo
-        ? 'При загрузке модели запрашивается перенос всех слоёв на GPU'
+        ? 'При загрузке модели GPU или CPU будет выбран автоматически'
+        : backend === 'cpu'
+        ? 'CPU/WASM: WebGPU-адаптер недоступен; модель загружена без GPU'
         : reported
         ? `Движок сообщил ${count}/${total} слоёв на GPU; запрошен перенос всех слоёв`
         : 'Запрошен перенос всех слоёв на GPU; фактическое размещение не подтверждено';

@@ -85,3 +85,43 @@ export async function checkConnectivity({ timeoutMs = 10000 } = {}) {
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000;
   return Promise.all(CHECKS.map(check => runCheck(check, timeout)));
 }
+
+// Check the default adapter, as requested by the current inference runtime.
+// This never initializes the model or allocates VRAM, and sends no network data.
+export async function checkWebGPU({ nav = globalThis.navigator, secure = globalThis.isSecureContext, timeoutMs = 5000 } = {}) {
+  const steps = 'В Chrome открой chrome://gpu и проверь WebGPU; в Edge — edge://gpu. Включи аппаратное ускорение в настройках браузера, перезапусти браузер и проверь драйвер видеокарты.';
+  if (!secure) return { status:'error', code:'insecure', detail:'WebGPU требует защищённого соединения HTTPS. Открой сайт по HTTPS.' };
+  if (typeof nav?.gpu?.requestAdapter !== 'function') return { status:'error', code:'api_unavailable', detail:`Браузер не предоставляет WebGPU. Обнови браузер и проверь аппаратное ускорение. ${steps}` };
+  let timer, timedOut = false;
+  try {
+    const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, 30000) : 5000;
+    const probe = async () => {
+      const core = await nav.gpu.requestAdapter();
+      if (core || timedOut) return {adapter:core, mode:'core'};
+      // The app's engine requests the default/core adapter. A second probe is
+      // diagnostic only: it does not configure the engine or create a device.
+      try {
+        const compat = await nav.gpu.requestAdapter({featureLevel:'compatibility'});
+        return {adapter:compat, mode:'compat'};
+      } catch {
+        // Older implementations may reject the compatibility option.
+        return {adapter:null, mode:'compat'};
+      }
+    };
+    const {adapter, mode} = await Promise.race([
+      probe(),
+      new Promise((_, reject) => { timer = setTimeout(() => { timedOut = true; reject(new Error('timeout')); }, timeout); }),
+    ]);
+    if (!adapter) return { status:'error', code:'no_adapter', detail:`Браузер предоставляет WebGPU, но не нашёл доступный адаптер. ${steps} WebGL может видеть GPU, даже когда WebGPU не может его открыть.` };
+    let info = {};
+    try { info = adapter.info || {}; } catch { /* Identity may be blocked even when an adapter exists. */ }
+    const name = [info.vendor, info.architecture, info.device, info.description].filter(v => typeof v === 'string' && v.trim()).map(v => v.trim().slice(0, 120));
+    const identity = [...new Set(name)].join(' · ') || 'название скрыто браузером';
+    const fallback = info.isFallbackAdapter === true;
+    if (mode === 'compat') return { status:'warning', code:'compat_only', detail:`Основной адаптер WebGPU недоступен, но запрос совместимого адаптера вернул результат: ${identity}.${fallback ? ' Браузер сообщает о резервном адаптере, который может быть программным.' : ''} Движок модели запрашивает основной режим; эта проверка не гарантирует его работу с совместимым адаптером. ${steps}` };
+    return { status:fallback ? 'warning' : 'ok', code:fallback ? 'fallback' : 'available', detail:`Адаптер WebGPU доступен: ${identity}.${fallback ? ' Браузер сообщает о резервном адаптере, который может быть программным.' : ''} Эта проверка не гарантирует загрузку модели или использование конкретной видеокарты.` };
+  } catch (error) {
+    const timeout = timedOut;
+    return { status:'error', code:timeout ? 'timeout' : 'adapter_error', detail:`${timeout ? 'Браузер не ответил на запрос WebGPU вовремя.' : 'Браузер не смог открыть адаптер WebGPU.'} ${steps}` };
+  } finally { clearTimeout(timer); }
+}

@@ -25,6 +25,9 @@ let activeModelBlobs = [];
 let activeBlobsHaveVision = false;
 let activeConfig = {};
 let baselineConfig = {};
+// This is the requested backend, not a claim about actual GPU offload. Keep it
+// across vision and other worker reinitializations for the same loaded model.
+let activeGpuLayers = null;
 // Each engine gets its own bounded collector: data from a previous worker must
 // never be presented as the active model's actual offload.
 const offloadCollectors = new WeakMap();
@@ -45,10 +48,32 @@ function loadOptions(config = {}) {
     n_ctx: 8192,
     n_parallel: 1,
     n_threads: globalThis.crossOriginIsolated ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1,
-    n_gpu_layers: 99999,
+    n_gpu_layers: activeGpuLayers ?? 99999,
     jinja: true,
     ...config,
   };
+}
+
+/** Probe before any network/model download. A null adapter is not a GPU OOM. */
+async function chooseGpuLayers(onStatus) {
+  if (!globalThis.isSecureContext) throw new Error('Для запуска нужен защищённый контекст HTTPS.');
+  onStatus('Проверяем доступность WebGPU…');
+  let adapter = null;
+  let timer = null;
+  try {
+    if (typeof globalThis.navigator?.gpu?.requestAdapter === 'function') {
+      // A driver can leave the adapter request pending indefinitely. An
+      // unresponsive probe falls back to CPU instead of blocking the UI.
+      adapter = await Promise.race([
+        globalThis.navigator.gpu.requestAdapter(),
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), 5000); }),
+      ]);
+    }
+  } catch { /* denied/unavailable: retain the supported CPU path */ }
+  finally { if (timer !== null) clearTimeout(timer); }
+  if (adapter) return 99999;
+  onStatus('Не удалось получить WebGPU-адаптер. Попробуем запуск на CPU; он может быть значительно медленнее и требует достаточно оперативной памяти.');
+  return 0;
 }
 
 function rememberLoadedConfig(instance, configured = {}) {
@@ -70,6 +95,31 @@ async function makeEngine() {
   offloadCollectors.set(instance, collector);
   instance.setCompat('default', 'firefox_safari');
   return instance;
+}
+
+// A preflight adapter and the adapter subsequently selected in the worker can
+// differ or disappear. Only retry initialization itself; downloads and file
+// validation are never repeated, and errors are not classified as GPU OOM.
+async function initializeWithCpuFallback(instance, files, gpuLayers, config, onStatus) {
+  try {
+    await instance.loadModel(files, loadOptions({...config, n_gpu_layers:gpuLayers}));
+    return {instance, gpuLayers};
+  } catch (gpuError) {
+    if (gpuLayers === 0 || gpuError?.name === 'AbortError') throw gpuError;
+    await instance.exit().catch(() => {});
+    onStatus('Не удалось инициализировать модель с GPU. Пробуем CPU на тех же файлах; это может быть значительно медленнее.');
+    let fallback = null;
+    try {
+      fallback = await makeEngine();
+      await fallback.loadModel(files, loadOptions({...config, n_gpu_layers:0}));
+      return {instance:fallback, gpuLayers:0};
+    } catch (cpuError) {
+      if (fallback) await fallback.exit().catch(() => {});
+      if (cpuError?.name === 'AbortError') throw cpuError;
+      const message = value => String(value?.message || value || 'неизвестная ошибка').slice(0, 1000);
+      throw new Error(`Не удалось инициализировать модель с GPU: ${message(gpuError)}. Повтор на CPU тоже не удался: ${message(cpuError)}.`);
+    }
+  }
 }
 
 // Download each shard separately so progress includes partially cached models.
@@ -110,13 +160,11 @@ async function findModelUrl(token = '') {
  */
 export async function loadModel({ onProgress = () => {}, onStatus = () => {}, modelUrl = '', projectorUrl = PROJECTOR_URL, token = '' } = {}) {
   if (loading || running) throw new Error('Модель уже занята.');
-  if (engine) return { vision: visionAvailable };
-  if (!globalThis.isSecureContext || !navigator.gpu) {
-    throw new Error('Нужны HTTPS и браузер с WebGPU. Попробуйте актуальный Chrome или Edge на компьютере.');
-  }
+  if (engine) return { vision: visionAvailable, backend:activeGpuLayers === 0 ? 'cpu' : 'gpu-requested' };
   loading = true;
   let instance;
   try {
+    let gpuLayers = await chooseGpuLayers(onStatus);
     onStatus('Проверяем файлы модели…');
     // modelUrl can point to the first shard of another compatible mirror.
     // The community mirror is discovered at runtime and can disappear or change.
@@ -127,7 +175,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     onStatus('Загружаем модель для текста…');
     const shards = await textShards(instance, resolvedModelUrl, onProgress, modelSource.sizes, token);
     onStatus('Инициализируем модель…');
-    await instance.loadModel(shards, loadOptions());
+    ({instance, gpuLayers} = await initializeWithCpuFallback(instance, shards, gpuLayers, {}, onStatus));
     visionAvailable = false;
     engine = instance;
     activeModelUrl = resolvedModelUrl;
@@ -139,9 +187,10 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     localProjector = null;
     activeModelBlobs = [...shards];
     activeBlobsHaveVision = false;
-    rememberLoadedConfig(instance);
-    onStatus('Модель готова для текста');
-    return { vision: false };
+    activeGpuLayers = gpuLayers;
+    rememberLoadedConfig(instance, {n_gpu_layers:gpuLayers});
+    onStatus(gpuLayers === 0 ? 'Модель готова для текста на CPU; работа может быть медленной' : 'Модель готова для текста; запрошен GPU');
+    return { vision: false, backend:gpuLayers === 0 ? 'cpu' : 'gpu-requested' };
   } catch (error) {
     if (instance) await instance.exit().catch(() => {});
     throw error;
@@ -153,10 +202,10 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
 /** Load explicitly selected GGUF files; these File objects last only for the tab session. */
 export async function loadLocalModel(modelFiles, projectorFile = null, { onStatus = () => {} } = {}) {
   if (loading || running) throw new Error('Модель уже занята.');
-  if (!globalThis.isSecureContext || !navigator.gpu) throw new Error('Нужны HTTPS и браузер с WebGPU.');
   loading = true;
   let instance = null;
   try {
+    let gpuLayers = await chooseGpuLayers(onStatus);
     onStatus('Проверяем локальные файлы…');
     const { shards, projector, files } = await prepareLocalModel(modelFiles, projectorFile);
     // Validate input and resolve the runtime before discarding a working engine.
@@ -169,7 +218,7 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
       await old.exit();
     }
     onStatus('Инициализируем локальную модель…');
-    await instance.loadModel(files, loadOptions());
+    ({instance, gpuLayers} = await initializeWithCpuFallback(instance, files, gpuLayers, {}, onStatus));
     const hasVision = instance.supportInputModality('image');
     if (projector && !hasVision) throw new Error('Движок не распознал компонент для картинок.');
     engine = instance;
@@ -182,9 +231,10 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
     visionAvailable = Boolean(projector && hasVision);
     activeModelBlobs = [...files];
     activeBlobsHaveVision = visionAvailable;
-    rememberLoadedConfig(engine);
-    onStatus(visionAvailable ? 'Локальная модель готова для текста и картинок' : 'Локальная модель готова для текста');
-    return { vision: visionAvailable };
+    activeGpuLayers = gpuLayers;
+    rememberLoadedConfig(engine, {n_gpu_layers:gpuLayers});
+    onStatus(gpuLayers === 0 ? 'Локальная модель готова на CPU; работа может быть медленной' : (visionAvailable ? 'Локальная модель готова для текста и картинок' : 'Локальная модель готова для текста'));
+    return { vision: visionAvailable, backend:gpuLayers === 0 ? 'cpu' : 'gpu-requested' };
   } catch (err) {
     if (instance) await instance.exit().catch(() => {});
     throw err;
@@ -220,10 +270,13 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {},
     await old.exit();
     old = null;
     next = await makeEngine();
-    await next.loadModel([...shards, projector], loadOptions(activeConfig));
+    let gpuLayers = activeGpuLayers ?? 99999;
+    ({instance:next, gpuLayers} = await initializeWithCpuFallback(next, [...shards, projector], gpuLayers, activeConfig, onStatus));
     if (!next.supportInputModality('image')) throw new Error('Движок не распознал компонент для картинок.');
     engine = next;
     next = null;
+    activeGpuLayers = gpuLayers;
+    activeConfig = {...activeConfig, n_gpu_layers:gpuLayers};
     visionAvailable = true;
     activeModelBlobs = [...shards, projector];
     activeBlobsHaveVision = true;
@@ -365,7 +418,7 @@ export async function inspectScene({ prompt, frame, reference = null, signal } =
 }
 
 export function getModelState() {
-  return { loaded: Boolean(engine), loading, running, vision: visionAvailable, mode: activeMode };
+  return { loaded: Boolean(engine), loading, running, vision: visionAvailable, mode: activeMode, backend:engine ? (activeGpuLayers === 0 ? 'cpu' : 'gpu-requested') : null };
 }
 
 /** Only expose capability numbers, never full model metadata or prompts. */
@@ -387,6 +440,7 @@ export function getLoadedContextInfo() {
   // A GPU adapter probe is not evidence of actual offload. Publish the two
   // integers only when reported by this worker's native llama.cpp log.
   const offload = offloadCollectors.get(engine)?.getResult();
+  out.requested_gpu_layers = activeGpuLayers;
   if (offload) {
     out.gpu_layers_offloaded = offload.gpuLayers;
     out.gpu_layers_total = offload.totalLayers;
@@ -494,5 +548,6 @@ export async function unloadModel() {
   activeBlobsHaveVision = false;
   activeConfig = {};
   baselineConfig = {};
+  activeGpuLayers = null;
   if (old) await old.exit();
 }

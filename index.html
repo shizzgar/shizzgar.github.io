@@ -34,14 +34,16 @@
         </div>
         <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
         <div class="bundle-feedback"><p id="bundle-result" role="status" aria-live="polite" hidden></p><button id="cancel-bundle" type="button" hidden>Отменить скачивание ZIP</button></div>
-        <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Движок запрашивает перенос всех слоёв на GPU через WebGPU; фактическое размещение зависит от браузера и устройства.</p>
+        <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. При доступном WebGPU движок запрашивает перенос всех слоёв на GPU; иначе попробует CPU, который может быть значительно медленнее.</p>
         <details class="hf-token-settings">
           <summary>Токен Hugging Face (необязательно)</summary>
-          <label for="hf-token">Токен с правом чтения</label>
-          <input id="hf-token" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-describedby="hf-token-note">
-          <p id="hf-token-note">Для загрузки в Forma и комплекта ZIP: токен остаётся в этой вкладке и отправляется только на huggingface.co. Ускорение не гарантировано. Отдельные прямые ссылки токен не используют.</p>
+          <form id="hf-token-form" autocomplete="off">
+            <label for="hf-token">Токен с правом чтения</label>
+            <input id="hf-token" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-describedby="hf-token-note">
+            <p id="hf-token-note">Для загрузки в Forma и комплекта ZIP: токен остаётся в этой вкладке и отправляется только на huggingface.co. Ускорение не гарантировано. Отдельные прямые ссылки токен не используют.</p>
+          </form>
         </details>
-        <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p></div>
+        <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><button id="check-webgpu" type="button">Проверить WebGPU</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p><p id="webgpu-result" role="status" aria-live="polite" hidden></p></div>
         <details class="download-files" id="download-files">
           <summary>Скачать файлы на компьютер</summary>
           <p>Кнопка «Скачать комплект ZIP» сохраняет готовые части GGUF и компонент для картинок одним архивом. Потребуется скачать примерно 3,4 ГБ с Hugging Face; на диске может понадобиться около 7 ГБ для кэша и архива. После скачивания распакуй ZIP, чтобы выбрать части в Forma. Для выбора места сохранения нужен совместимый браузер, например актуальный Chrome или Edge. Докачка после обрыва зависит от браузера и источника файлов.</p>

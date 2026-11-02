@@ -193,7 +193,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
       case 'validating': tick(`Проверка запуска${suffix}`, 'Запускаю код и отслеживаю ошибки.'); break;
       case 'validation_failed': tick(`Ошибка проверки${suffix}`, Array.isArray(e.errors) ? e.errors.join('\n') : e.errors, 'error'); break;
       case 'repairing': tick('Исправление', 'Передаю найденные ошибки модели.'); break;
-      case 'success': tick('Проверка пройдена', 'Сцена запущена; визуальная оценка зависит от доступности vision.', 'success'); break;
+      case 'success': tick('Проверка пройдена', 'Ошибок выполнения за время проверки не обнаружено.', 'success'); break;
       case 'failed': tick('Остановлено с ошибкой', Array.isArray(e.errors) ? e.errors.join('\n') : e.errors, 'error'); badge.textContent = 'ОШИБКА'; badge.dataset.state = 'error'; break;
       default: if (e.type && e.label) tick(e.label, e.detail);
     }

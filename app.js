@@ -1,5 +1,5 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, inspectScene, getModelState } from './inference.js';
-import { checkConnectivity } from './diagnostics.js';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, getModelState } from './inference.js';
+import { checkConnectivity, checkWebGPU } from './diagnostics.js';
 import { createBundle } from './bundle-download.js';
 import { runAgent } from './agent-loop.js';
 import { validateScene, disposeScene } from './sandbox-runner.js';
@@ -10,6 +10,8 @@ const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
 // The token is never stored by the app; discard any value restored by the browser.
 ui['hf-token'].value = '';
+// The form is present for browser password-field semantics, not submission.
+$('hf-token-form').addEventListener('submit', event => event.preventDefault());
 const secret = () => ui['hf-token'].value.trim();
 const redact = value => { const text = String(value ?? ''); const token = secret(); return token ? text.split(token).join('[скрыто]') : text; };
 const trace = createTracePanel(ui['trace-mount'], {redact, getSecret:secret});
@@ -80,6 +82,14 @@ function formatBytes(bytes) {
   const value = bytes / (1024 ** index);
   return `${index === 0 ? Math.floor(value) : value.toFixed(1)} ${units[index]}`;
 }
+function updateModelStatus() {
+  const state = getModelState();
+  if (!state.loaded) return;
+  const name = state.mode === 'local' ? 'Локальная модель' : 'Модель';
+  const modality = state.vision ? 'текст и картинки' : 'текст';
+  const backend = state.backend === 'cpu' ? ' · CPU' : state.backend === 'gpu-requested' ? ' · GPU запрошен' : '';
+  ui['model-status'].textContent = `${name}: ${modality}${backend}`;
+}
 function startStage(text) {
   ui['model-status'].textContent = text;
   ui['progress-wrap'].hidden = false;
@@ -108,6 +118,7 @@ function finishProgress() {
   ui['model-progress'].removeAttribute('value');
   ui['progress-track'].classList.add('indeterminate');
   ui['model-progress-detail'].textContent = '';
+  updateModelStatus();
 }
 ui['download-bundle'].addEventListener('click', async () => {
   if (busy) return;
@@ -239,8 +250,7 @@ function agentValidator({status, session, selected}) {
     const run = trace.toolStart('Запуск и проверка сцены', {html});
     let runFinished = false;
     try {
-      const canInspect = getModelState().vision;
-      const validation = await validateScene({iframe: frame, html, signal, captureImage: canInspect, onRuntimeError: detail => {
+      const validation = await validateScene({iframe: frame, html, signal, captureImage: false, onRuntimeError: detail => {
         trace.stage('Ошибка во время работы сцены', detail.message);
         if (detail.kind === 'webgl-context-lost') {
           if (activeScene === session && session.frame === frame && ui['preview-frame'] === frame) {
@@ -256,36 +266,9 @@ function agentValidator({status, session, selected}) {
         queueLateRepair(session, detail.message);
       }});
       trace.toolFinish(run, validation.ok
-        ? {output:{evidence:validation.evidence, warnings:validation.warnings}, screenshot:validation.screenshot}
-        : {error:(validation.errors || []).join('\n') || 'Проверка не прошла', screenshot:validation.screenshot});
+        ? {output:{evidence:validation.evidence, warnings:validation.warnings}}
+        : {error:(validation.errors || []).join('\n') || 'Проверка не прошла'});
       runFinished = true;
-      if (validation.ok && canInspect && validation.screenshot) {
-        status.textContent = 'Осматриваю кадр сцены и сравниваю с запросом…';
-        const visionCall = trace.toolStart('Визуальная проверка', {prompt:session.prompt, frame:validation.screenshot, reference:session.reference});
-        let visual;
-        try {
-          visual = await inspectScene({prompt:session.prompt, frame: validation.screenshot, reference: session.reference, signal});
-          trace.toolFinish(visionCall, {output:visual, screenshot:validation.screenshot});
-        } catch (err) {
-          trace.toolFinish(visionCall, {error:err});
-          throw err;
-        }
-        validation.visual = visual;
-        if (visual.status === 'issue') {
-          // The same generative model is not a verified visual judge. Keep a
-          // technically working scene and surface its subjective observation
-          // rather than discarding it or spending another generation attempt.
-          const warning = `Визуальная оценка предположила проблему: ${visual.description}. Проверь сцену самостоятельно.`;
-          validation.warnings = [...(validation.warnings || []), warning];
-          trace.stage('Замечание визуальной проверки', warning);
-        } else if (visual.status === 'unknown') {
-          validation.warnings = [...(validation.warnings || []), `Визуальная проверка не дала уверенного результата: ${visual.description}`];
-        }
-      } else if (validation.ok && !canInspect) {
-        validation.warnings = [...(validation.warnings || []), 'Визуальная проверка недоступна: компонент для картинок не загружен.'];
-      } else if (validation.ok && !validation.screenshot) {
-        validation.warnings = [...(validation.warnings || []), 'Визуальная проверка недоступна: не удалось получить кадр сцены.'];
-      }
       if (lateIssues.length) {
         validation.ok = false;
         validation.retryable = !contextLost;
@@ -351,7 +334,6 @@ async function runLateRepair(session) {
     selected.frame = null;
     const warning = (result.validation.warnings || []).join(' ');
     status.textContent = redact(warning ? `Ошибка исправлена; замечание проверки: ${warning}` : 'Ошибка исправлена и запуск сцены проверен.');
-    if (result.validation.visual?.status === 'issue') ui['preview-status'].textContent = 'Возможная проблема внешнего вида';
     trace.finish('Исправлено', 'done');
   } catch (err) {
     status.textContent = err?.name === 'AbortError' ? 'Исправление остановлено.' : 'Автоматически исправить сцену не удалось.';
@@ -398,6 +380,19 @@ ui['check-connectivity'].addEventListener('click', async () => {
   } catch (e) { output.textContent = `Не удалось выполнить проверку: ${e?.message || String(e)}`; }
   finally { button.disabled = false; }
 });
+$('check-webgpu').addEventListener('click', async () => {
+  const button = $('check-webgpu');
+  const output = $('webgpu-result');
+  button.disabled = true;
+  output.hidden = false;
+  output.textContent = 'Проверяю адаптер WebGPU…';
+  try {
+    const result = await checkWebGPU();
+    output.textContent = result.detail;
+  } catch {
+    output.textContent = 'Не удалось проверить WebGPU. В Chrome открой chrome://gpu, в Edge — edge://gpu.';
+  } finally { button.disabled = false; }
+});
 ui['load-local'].addEventListener('click', async () => {
   if (busy) return;
   setBusy(true); error('');
@@ -409,50 +404,15 @@ ui['load-local'].addEventListener('click', async () => {
     profiler.invalidate();
     finishProgress();
     ui['load-model'].textContent = 'Готово ✓';
-    ui['model-status'].textContent = result.vision ? 'Локальная модель: текст и картинки' : 'Локальная модель: текст';
+    updateModelStatus();
     appendMessage('FORMA · ЛОКАЛЬНАЯ МОДЕЛЬ', result.vision ? 'Можно описать сцену или приложить картинку.' : 'Можно создавать сцены по тексту. Для картинки выбери файл mmproj в разделе своих файлов.');
   } catch (e) {
     finishProgress();
     if (!getModelState().loaded) { ui['model-status'].textContent = 'Модель не загружена'; ui['load-model'].textContent = 'Загрузить ↗'; }
-    else { ui['model-status'].textContent = getModelState().vision ? 'Готова для текста и картинок' : 'Готова для текста'; }
+    else { updateModelStatus(); }
     error(e?.message || String(e));
   } finally { setBusy(false); }
 });
-async function prepareVisualInspection(status) {
-  const state = getModelState();
-  if (state.vision) return;
-  const local = state.mode === 'local';
-  const projector = local ? ui['projector-file'].files?.[0] : null;
-  if (local && !projector) {
-    appendMessage('FORMA · ПРОВЕРКА', 'Для визуальной проверки выбери локальный файл mmproj. Пока проверю только выполнение сцены.');
-    trace.stage('Визуальная проверка недоступна', 'Локальный mmproj не выбран; будет выполнена техническая проверка.');
-    return;
-  }
-  status.textContent = local ? 'Подключаю локальный компонент для визуальной проверки…' : 'Загружаю компонент для визуальной проверки (около 676 МБ)…';
-  startStage(local ? 'Подключаем локальный компонент…' : 'Загружаем компонент для визуальной проверки…');
-  const call = trace.toolStart('Подключение vision', {источник:local ? 'локальный файл' : 'Hugging Face', размер:local ? projector.size : 'около 676 МБ'});
-  try {
-    if (local) await setLocalProjector(projector);
-    await ensureVision({onStatus:text => {startStage(text); trace.stage(text);}, onProgress:updateProgress, token:ui['hf-token'].value.trim()});
-    trace.toolFinish(call, {output:'Компонент для визуальной проверки подключён.'});
-  } catch (err) {
-    trace.toolFinish(call, {error:err});
-    // A failed download leaves the text engine alive; a failed reinitialization
-    // can unload it, so restore it before continuing with technical checks.
-    if (!getModelState().loaded) {
-      startStage('Восстанавливаем текстовую модель…');
-      try {
-        if (local) await loadLocalModel(ui['model-files'].files, null, {onStatus:startStage});
-        else await loadModel({onStatus:startStage, onProgress:updateProgress, token:ui['hf-token'].value.trim()});
-        trace.stage('Текстовая модель восстановлена');
-      } catch {
-        throw new Error('Не удалось подключить визуальную проверку и восстановить модель. Повтори загрузку модели.');
-      }
-    }
-    appendMessage('FORMA · ПРОВЕРКА', 'Не удалось подключить визуальную проверку. Продолжу с проверкой выполнения и ошибок.');
-    trace.stage('Визуальная проверка недоступна', 'Продолжаю техническую проверку сцены.');
-  } finally { finishProgress(); }
-}
 ui['prompt-form'].addEventListener('submit', async event => {
   event.preventDefault();
   if (busy) return;
@@ -488,8 +448,6 @@ ui['prompt-form'].addEventListener('submit', async event => {
       finishProgress();
     }
     if (agentController.signal.aborted) throw new DOMException('Создание сцены остановлено.', 'AbortError');
-    if (!image && !getModelState().vision) await prepareVisualInspection(status);
-    if (agentController.signal.aborted) throw new DOMException('Создание сцены остановлено.', 'AbortError');
     await profiler.run(agentController.signal);
     if (agentController.signal.aborted) throw new DOMException('Создание сцены остановлено.', 'AbortError');
     const result = await runAgent({
@@ -509,9 +467,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
     activeScene = session;
     selected.frame = null;
     const warning = (result.validation.warnings || []).join(' ');
-    const inspected = result.validation.visual?.status === 'ok';
-    status.textContent = redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : inspected ? 'Сцена запущена и осмотрена моделью. Визуальная оценка приблизительная.' : 'Сцена запущена, ошибок за время проверки не обнаружено. Внешний вид и соответствие запросу автоматически не подтверждены.');
-    if (result.validation.visual?.status === 'issue') ui['preview-status'].textContent = 'Возможная проблема внешнего вида';
+    status.textContent = redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : 'Сцена запущена, ошибок за время проверки не обнаружено. Внешний вид и соответствие запросу автоматически не подтверждены.');
     trace.finish('Готово', 'done');
     ui['prompt-input'].value = '';
     clearImage();
@@ -523,7 +479,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
       ui['model-status'].textContent = 'Модель не загружена';
       ui['load-model'].textContent = 'Загрузить ↗';
     } else {
-      ui['model-status'].textContent = getModelState().vision ? 'Готова для текста и картинок' : 'Готова для текста';
+      updateModelStatus();
     }
     if (e?.name !== 'AbortError') error(e?.message || String(e));
     if (e?.name !== 'AbortError') trace.stage('Не удалось завершить', e?.message || String(e));
