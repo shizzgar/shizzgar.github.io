@@ -29,15 +29,15 @@
         <div class="model-card">
           <div class="model-icon" aria-hidden="true">✳</div>
           <div class="model-copy"><strong>3D Coder</strong><span id="model-status" role="status" aria-live="polite">Модель не загружена</span></div>
-          <button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button>
+          <div class="model-actions"><button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button><button id="open-local" class="local-open-button" type="button" aria-controls="local-files" aria-expanded="false">С компьютера</button></div>
         </div>
         <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
         <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Нужен WebGPU; совместимость проверяется.</p>
         <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p></div>
-        <details class="local-files">
+        <details class="local-files" id="local-files">
           <summary>Свои файлы модели</summary>
-          <p>Выбери все части GGUF-модели и, если нужен ввод картинок, отдельный файл mmproj. Части должны быть не больше 2 ГиБ каждая; большой файл нужно предварительно разделить через llama-gguf-split.</p>
-          <label for="model-files">Части модели (.gguf)</label>
+          <p>Выбери один GGUF-файл до 2 ГиБ или все части модели одновременно. Большой файл сначала нужно разделить через llama-gguf-split. Для картинок добавь отдельный файл mmproj.</p>
+          <label for="model-files">Модель: один файл или все части (.gguf)</label>
           <input id="model-files" type="file" accept=".gguf" multiple>
           <label for="projector-file">Компонент для картинок (.gguf), необязательно</label>
           <input id="projector-file" type="file" accept=".gguf">

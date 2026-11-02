@@ -2,7 +2,7 @@ import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, g
 import { checkConnectivity } from './diagnostics.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','open-local','local-files','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
 let scene = '';
 let image = null;
 let imageUrl = null;
@@ -27,11 +27,21 @@ function setBusy(value) {
   busy = value;
   ui['generate-button'].disabled = value;
   ui['load-model'].disabled = value || getModelState().loaded;
+  ui['open-local'].disabled = value;
   ui['load-local'].disabled = value;
   ui['model-files'].disabled = value;
   ui['projector-file'].disabled = value;
   ui['image-input'].disabled = value;
 }
+ui['open-local'].addEventListener('click', () => {
+  if (busy) return;
+  ui['local-files'].open = true;
+  ui['open-local'].setAttribute('aria-expanded', 'true');
+  ui['model-files'].focus();
+});
+ui['local-files'].addEventListener('toggle', () => {
+  ui['open-local'].setAttribute('aria-expanded', String(ui['local-files'].open));
+});
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 Б';
   const units = ['Б', 'КиБ', 'МиБ', 'ГиБ'];

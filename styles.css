@@ -15,3 +15,12 @@
 #model-progress-detail { color: #aab9a1; font-size: 11px; line-height: 1.4; margin: 6px 0 0; font-variant-numeric: tabular-nums; }
 @keyframes forma-progress { 0% { transform: translateX(-110%); } 100% { transform: translateX(300%); } }
 @media (prefers-reduced-motion: reduce) { .progress-motion { animation: none; transform: translateX(90%); } }
+
+/* Two explicit ways to choose the model. */
+.model-card { flex-wrap: wrap; }
+.model-copy { flex: 1 1 90px; }
+.model-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-left: auto; }
+.model-actions .load-button { margin-left: 0; }
+.local-open-button { border: 1px solid #66794d; background: transparent; color: #e1f7bc; border-radius: 6px; padding: 9px 11px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.local-open-button:not(:disabled):hover { background: #303c27; }
+.local-files input:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
