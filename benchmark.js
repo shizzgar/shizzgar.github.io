@@ -14,7 +14,7 @@ function clampPositive(value, fallback, min, max) {
 function safeInteger(value) { return Number.isSafeInteger(value) && value > 0 ? value : null; }
 
 /** Capability information is approximate and browser-dependent, not a speed measurement. */
-export async function profileDevice({ nav = globalThis.navigator, isolated = globalThis.crossOriginIsolated === true } = {}) {
+export async function profileDevice({ nav = globalThis.navigator, doc = globalThis.document, isolated = globalThis.crossOriginIsolated === true } = {}) {
   const out = {
     secureContext: globalThis.isSecureContext === true,
     crossOriginIsolated: isolated,
@@ -23,11 +23,36 @@ export async function profileDevice({ nav = globalThis.navigator, isolated = glo
     webgpuAvailable: Boolean(nav?.gpu),
     adapterAvailable: false,
     adapter: null,
+    webglAvailable: false,
+    webglDebugAvailable: false,
+    webglRenderer: null,
+    webglVendor: null,
     maxBufferBytes: null,
     maxStorageBufferBindingBytes: null,
     // Wllama can use threads only when the environment is cross-origin isolated.
     wasmThreadsAvailable: isolated && typeof SharedArrayBuffer === 'function',
   };
+  // A separate WebGL context may reveal the renderer when a browser exposes
+  // its debug extension. It is not evidence of the adapter used by inference.
+  // No pixels, fingerprint, identifiers or results leave this page.
+  let gl = null;
+  try {
+    const canvas = doc?.createElement?.('canvas');
+    gl = canvas?.getContext?.('webgl2') || canvas?.getContext?.('webgl') || null;
+    if (gl) {
+      out.webglAvailable = true;
+      const debug = gl.getExtension('WEBGL_debug_renderer_info');
+      if (debug) {
+        out.webglDebugAvailable = true;
+        const readable = value => typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : null;
+        out.webglRenderer = readable(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL));
+        out.webglVendor = readable(gl.getParameter(debug.UNMASKED_VENDOR_WEBGL));
+      }
+    }
+  } catch { /* Unsupported, blocked, or lost contexts reveal no reliable name. */ }
+  finally {
+    try { gl?.getExtension?.('WEBGL_lose_context')?.loseContext(); } catch { /* best effort cleanup */ }
+  }
   if (!nav?.gpu?.requestAdapter) return out;
   try {
     const adapter = await nav.gpu.requestAdapter();

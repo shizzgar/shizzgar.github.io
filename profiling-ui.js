@@ -15,15 +15,20 @@ export function createProfiler(trace) {
       const device = cachedDevice || await profileDevice();
       throwIfAborted(signal);
       cachedDevice = device;
-      const info = getLoadedContextInfo() || {};
+      const loadedInfo = getLoadedContextInfo();
+      const info = loadedInfo || {};
       const count = info.gpu_layers_offloaded;
       const total = info.gpu_layers_total;
       const reported = Number.isSafeInteger(count) && count >= 0 && Number.isSafeInteger(total) && total > 0 && count <= total;
-      const placement = reported
+      const placement = !loadedInfo
+        ? 'При загрузке модели запрашивается перенос всех слоёв на GPU'
+        : reported
         ? `Движок сообщил ${count}/${total} слоёв на GPU; запрошен перенос всех слоёв`
         : 'Запрошен перенос всех слоёв на GPU; фактическое размещение не подтверждено';
       trace.setDevice({
         gpu: device.adapter || (device.adapterAvailable ? 'имя не раскрыто браузером' : 'не обнаружен'),
+        webglGpu: device.webglRenderer || (device.webglAvailable ? 'имя не раскрыто браузером' : 'недоступен'),
+        webglNote: 'Адаптер WebGL может отличаться от используемого моделью через WebGPU.',
         backend: placement,
         vram: 'Свободная VRAM недоступна из браузера',
         cores: device.logicalCores ?? 'неизвестно',
@@ -33,7 +38,7 @@ export function createProfiler(trace) {
         context: info.n_ctx ?? 'неизвестно',
         batch: info.n_batch ?? 'по умолчанию',
       });
-      trace.stage('Режим модели', placement);
+      if (loadedInfo) trace.stage('Режим модели', placement);
     },
   };
 }

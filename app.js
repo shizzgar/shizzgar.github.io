@@ -14,6 +14,10 @@ const secret = () => ui['hf-token'].value.trim();
 const redact = value => { const text = String(value ?? ''); const token = secret(); return token ? text.split(token).join('[скрыто]') : text; };
 const trace = createTracePanel(ui['trace-mount'], {redact, getSecret:secret});
 const profiler = createProfiler(trace);
+// Probe browser capabilities before the user commits to downloading the model.
+// This only reads local WebGPU/WebGL information; a failure must not prevent
+// loading or using the application.
+void profiler.run().catch(() => {});
 let scene = '';
 let image = null;
 let imageUrl = null;
