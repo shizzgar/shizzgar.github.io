@@ -8,8 +8,8 @@ const benchmark = new vm.SyntheticModule(['profileDevice'],function(){this.setEx
 const inference = new vm.SyntheticModule(['getLoadedContextInfo','getModelState'],function(){this.setExport('getLoadedContextInfo',()=>info);this.setExport('getModelState',()=>({loaded:!!info,backend}));},{context:ctx});
 const module = new vm.SourceTextModule(source,{context:ctx});await module.link(spec=>spec==='./benchmark.js'?benchmark:inference);await module.evaluate();
 let state,stages=[];const profiler=module.namespace.createProfiler({setDevice:value=>state=value,stage:(...args)=>stages.push(args)});
-await profiler.run();assert.match(state.backend,/автоматически/);assert.equal(stages.length,0);
-backend='cpu';info={n_ctx:8192,requested_gpu_layers:0};await profiler.run();assert.match(state.backend,/CPU\/WASM/);assert.doesNotMatch(state.backend,/запрошен перенос/i);assert.match(stages.at(-1)[1],/CPU\/WASM/);
+await profiler.run();assert.match(state.backend,/автоматически/);assert.equal(state.outputLimit,'Модель ещё не загружена');assert.equal(stages.length,0);
+backend='cpu';info={n_ctx:32768,output_token_limit:32768,requested_gpu_layers:0};await profiler.run();assert.equal(state.context,32768);assert.equal(state.outputLimit,32768);assert.match(state.contextNote,/изображения/);assert.match(state.contextNote,/меньше потолка/);assert.match(state.backend,/CPU\/WASM/);assert.doesNotMatch(state.backend,/запрошен перенос/i);assert.match(stages.at(-1)[1],/CPU\/WASM/);
 backend='gpu-requested';info={n_ctx:8192};await profiler.run();assert.match(state.backend,/запрошен перенос/i);assert.match(state.backend,/не подтверждено/);
 info={n_ctx:8192,gpu_layers_offloaded:28,gpu_layers_total:29};await profiler.run();assert.match(state.backend,/28\/29/);
 backend='cpu';await profiler.run();assert.match(state.backend,/CPU\/WASM/);assert.doesNotMatch(state.backend,/28\/29/);

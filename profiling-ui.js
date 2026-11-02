@@ -65,6 +65,8 @@ export function createProfiler(trace) {
         webgpu: device.adapterAvailable ? 'доступен' : 'не подтверждён',
         threads: info.n_threads ?? (device.wasmThreadsAvailable ? 'доступны' : '1 (без изоляции)'),
         context: info.n_ctx ?? 'неизвестно',
+        outputLimit: info.output_token_limit ?? (loadedInfo ? 'неизвестно' : 'Модель ещё не загружена'),
+        contextNote: 'Запрос, изображения, размышления и ответ занимают общее окно контекста; доступный для ответа объём может быть меньше потолка.',
         batch: info.n_batch ?? 'по умолчанию',
       });
       if (loadedInfo) trace.stage('Режим модели', placement);

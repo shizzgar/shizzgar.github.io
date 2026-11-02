@@ -23,7 +23,10 @@ calls=0;
 const unavailable=await runAgent({prompt:'x',generate:async()=>{calls++;return html},validate:async()=>({ok:false,retryable:false,errors:['No WebGL']})});
 assert.equal(calls,1); assert.equal(unavailable.reason,'validation_unavailable');
 const invalid=await runAgent({prompt:'x',generate:async()=>html,validate:async()=>({})}); assert.equal(invalid.reason,'validation_unavailable');
-const limit=await runAgent({prompt:'x',generate:async()=>'<html>'+('a'.repeat(48001))+'</html>',validate:async()=>({ok:false})}); assert.equal(limit.reason,'context_limit');
+const largeInputs=[];
+const largeScene='<html>'+('a'.repeat(48001))+'</html>';
+const largeRetry=await runAgent({prompt:'x',generate:async input=>{largeInputs.push(input);return largeInputs.length===1?largeScene:html},validate:async source=>source===largeScene?{ok:false,errors:['runtime']}:{ok:true}});
+assert.equal(largeRetry.ok,true);assert.equal(largeInputs[1].previousCode,largeScene,'large scene is passed intact without a character-based context guess');
 const fatal=await runAgent({prompt:'x',generate:async()=>{throw Error('GPU lost')},validate:async()=>({ok:true})}); assert.equal(fatal.reason,'generation_error');
 const ac = new AbortController(); ac.abort(); await assert.rejects(()=>runAgent({prompt:'x',signal:ac.signal,generate:async()=>html,validate:async()=>({ok:true})}),{name:'AbortError'});
 const ac2 = new AbortController(); await assert.rejects(()=>runAgent({prompt:'x',signal:ac2.signal,generate:async()=>{ac2.abort();return html},validate:async()=>({ok:true})}),{name:'AbortError'});
@@ -31,8 +34,9 @@ console.log('PASS bounded agent loop: repair, malformed output, validation unava
 const lateInputs=[];
 const late = await runAgent({prompt:'Создай дом',previousCode:failHtml,initialErrors:['TypeError: поздняя ошибка'],generate:async x=>{lateInputs.push(x);return html},validate:async()=>({ok:true})});
 assert.equal(late.ok,true); assert.equal(lateInputs[0].previousCode,failHtml); assert.match(lateInputs[0].prompt,/TypeError: поздняя ошибка/); assert.match(lateInputs[0].prompt,/Создай дом/);
-let shouldNotRun=false;
-const tooBig=await runAgent({prompt:'x',previousCode:'a'.repeat(20001),initialErrors:['late'],generate:async()=>{shouldNotRun=true;return html},validate:async()=>({ok:true})}); assert.equal(tooBig.reason,'context_limit');assert.equal(shouldNotRun,false);
+const largeRepairCode='a'.repeat(40001), largeRepairInputs=[];
+const largeRepair=await runAgent({prompt:'x',previousCode:largeRepairCode,initialErrors:['late'],generate:async input=>{largeRepairInputs.push(input);return html},validate:async()=>({ok:true})});
+assert.equal(largeRepair.ok,true);assert.equal(largeRepairInputs[0].previousCode,largeRepairCode,'late repair code must not be cut off by old character limit');
 console.log('PASS late errors repair and context boundary');
 
 const draft = '<html><body>DRAFT</body></html>';
@@ -62,38 +66,28 @@ for (const output of [
 }
 const containsThink = '<html><body><script>const s="<think>literally kept</think>";</script></body></html>';
 assert.equal((await resultFor(containsThink)).result.html,containsThink);
-const truncatedInputs=[];
-const recovered=await runAgent({prompt:'Сложный город',generate:async input=>{truncatedInputs.push(input);return truncatedInputs.length===1?{text:'<html>'+('x'.repeat(25000)),finishReason:'length'}:{text:finalDoc,finishReason:'stop'}},validate:async()=>({ok:true})});
-assert.equal(recovered.ok,true);assert.equal(truncatedInputs.length,2);assert.equal(truncatedInputs[1].previousCode,'');assert.match(truncatedInputs[1].prompt,/лимиту генерации или контекста/);assert.match(truncatedInputs[1].prompt,/более компактную сцену/);
-const edits=[];
-await runAgent({prompt:'Сделай крышу красной',previousCode:html,generate:async input=>{edits.push(input);return edits.length===1?{text:'<html>truncated',finishReason:'length'}:finalDoc},validate:async()=>({ok:true})});
-assert.equal(edits[1].previousCode,html);
-console.log('PASS final answer extraction and truncated generation recovery');
+const truncatedInputs=[], truncatedEvents=[];
+const partial='<think>still reasoning';
+const stopped=await runAgent({prompt:'Построй маяк', previousCode:html, initialErrors:['сломался рендер'], onEvent:event=>truncatedEvents.push(event), generate:async input=>{truncatedInputs.push(input);return {text:partial,finishReason:'length'}}, validate:async()=>{throw Error('incomplete HTML must not run')}});
+assert.equal(stopped.ok,false);assert.equal(stopped.reason,'output_limit');assert.equal(stopped.attempts,1);assert.equal(stopped.lastOutput,partial,'keep the partial response for inspection');
+assert.equal(truncatedInputs.length,1,'do not repeat a generation under the same exhausted budget');
+assert.equal(truncatedInputs[0].thinking,undefined,'preserve the user thinking preference');
+assert.equal(truncatedInputs[0].previousCode,html,'the prior working scene is preserved');
+assert.match(truncatedInputs[0].prompt,/Построй маяк/);assert.match(truncatedInputs[0].prompt,/сломался рендер/);
+assert(!truncatedEvents.some(e=>e.type==='retry_without_thinking'||e.type==='repairing'),'no forced thinking change or unchanged-budget retry');
+assert(truncatedEvents.some(e=>e.type==='failed'&&e.reason==='output_limit'));
+assert(!stopped.errors[0].includes('компактн'),'do not ask for a simpler scene');
 
-const retryInputs=[], retryEvents=[];
-const retry=await runAgent({prompt:'Построй маяк', previousCode:html, initialErrors:['сломался рендер'], onEvent:event=>retryEvents.push(event), generate:async input=>{
-  retryInputs.push(input);
-  return retryInputs.length===1 ? {text:'<think>still reasoning',finishReason:'length'}
-    : retryInputs.length===2 ? {text:'',finishReason:'length'} : {text:finalDoc,finishReason:'stop'};
-}, validate:async()=>({ok:true})});
-assert.equal(retry.ok,true);
-assert.equal(retryInputs[0].thinking,undefined,'first attempt preserves caller preference');
-assert.equal(retryInputs[1].thinking,false,'truncated thinking is disabled for retry');
-assert.equal(retryInputs[2].thinking,false,'subsequent retries retain the disabled override');
-assert.equal(retryInputs[1].previousCode,html,'prior working scene survives truncated generation');
-assert.match(retryInputs[1].prompt,/Построй маяк/);
-assert.match(retryInputs[1].prompt,/сломался рендер/,'late repair diagnostic survives truncated answer');
-assert(!retryInputs[1].prompt.includes('still reasoning'),'partial output is not repeated');
-assert.deepEqual(retryEvents.filter(event=>event.type==='retry_without_thinking').map(event=>event.attempt),[2]);
-
+const empty=await runAgent({prompt:'x',generate:async()=>({text:'',finishReason:'length'}),validate:async()=>{throw Error('empty response must not run')}});
+assert.equal(empty.reason,'output_limit');assert.equal(empty.lastOutput,'');
 const incompleteInputs=[];
 await runAgent({prompt:'x',generate:async input=>{incompleteInputs.push(input);return incompleteInputs.length===1?{text:'<html>incomplete',finishReason:null}:html},validate:async()=>({ok:true})});
-assert.equal(incompleteInputs[1].thinking,undefined,'unknown finish reason must not trigger an override');
+assert.equal(incompleteInputs.length,2,'unknown finish reason still permits correction');
+assert.equal(incompleteInputs[1].thinking,undefined);
 const fullLengthInputs=[];
 const fullLength=await runAgent({prompt:'x',generate:async input=>{fullLengthInputs.push(input);return {text:html,finishReason:'length'}},validate:async()=>({ok:true})});
-assert.equal(fullLength.ok,true,'a complete HTML at length limit is validated');
-assert.equal(fullLengthInputs.length,1);
-const exhaustedEvents=[];
-await runAgent({prompt:'x',maxAttempts:1,onEvent:e=>exhaustedEvents.push(e),generate:async()=>({text:'',finishReason:'length'}),validate:async()=>({ok:true})});
-assert(!exhaustedEvents.some(event=>event.type==='retry_without_thinking'),'no retry event after last attempt');
-console.log('PASS adaptive reasoning override, bounded retries and truthful events');
+assert.equal(fullLength.ok,true,'a complete HTML at length limit is validated');assert.equal(fullLengthInputs.length,1);
+const engineContextError=Object.assign(new Error('kv cache is full'),{type:'kv_cache_full'});
+const contextFull=await runAgent({prompt:'x',generate:async()=>{throw engineContextError},validate:async()=>({ok:true})});
+assert.equal(contextFull.reason,'context_limit');assert.match(contextFull.errors[0],/контекст модели заполнен/);
+console.log('PASS length limit is reported without reducing thinking or request, no guessed character limit');

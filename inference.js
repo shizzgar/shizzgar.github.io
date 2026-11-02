@@ -8,6 +8,9 @@ const WLLAMA_ESM = `https://cdn.jsdelivr.net/npm/@wllama/wllama@${WLLAMA_VERSION
 const WLLAMA_WASM = `https://cdn.jsdelivr.net/npm/@wllama/wllama@${WLLAMA_VERSION}/src/wasm/wllama.wasm`;
 const SPLIT_REPO = 'ReallyFloppyPenguin/Qwen3.5-4B-3D-Coder-GGUF-split';
 const PROJECTOR_URL = 'https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/mmproj-Qwen3.5-4B-BF16.gguf';
+// Qwen3.5-4B's configured window is 262144; other GGUFs can have a
+// different training window. Runtime allocation is attempted, not assumed.
+const CONTEXT_ATTEMPTS = [262144, 131072, 65536, 32768, 16384, 8192];
 
 let engine = null;
 let loading = false;
@@ -48,8 +51,9 @@ function hfHeaders(url, token) {
 
 function loadOptions(config = {}) {
   return {
-    n_ctx: 8192,
+    n_ctx: activeConfig.n_ctx || CONTEXT_ATTEMPTS[0],
     n_parallel: 1,
+    ctx_shift: false,
     n_threads: globalThis.crossOriginIsolated ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1,
     n_gpu_layers: activeGpuLayers ?? 99999,
     jinja: true,
@@ -79,16 +83,17 @@ async function chooseGpuLayers(onStatus) {
   return 0;
 }
 
-function rememberLoadedConfig(instance, configured = {}) {
+function rememberLoadedConfig(instance, configured = {}, updateBaseline = true) {
   activeConfig = { ...configured };
   try {
     const info = instance.getLoadedContextInfo();
+    if (Number.isSafeInteger(info?.n_ctx) && info.n_ctx > 0) activeConfig.n_ctx = info.n_ctx;
     if (Number.isInteger(info?.n_batch) && Number.isInteger(info?.n_ubatch)) {
-      baselineConfig = { n_batch: info.n_batch, n_ubatch: info.n_ubatch };
+      if (updateBaseline) baselineConfig = { n_batch: info.n_batch, n_ubatch: info.n_ubatch };
       return;
     }
   } catch { /* Older/mocked runtimes may not expose actual values. */ }
-  baselineConfig = { ...configured };
+  if (updateBaseline) baselineConfig = { ...configured };
 }
 
 async function makeEngine() {
@@ -104,25 +109,34 @@ async function makeEngine() {
 // differ or disappear. Only retry initialization itself; downloads and file
 // validation are never repeated, and errors are not classified as GPU OOM.
 async function initializeWithCpuFallback(instance, files, gpuLayers, config, onStatus) {
-  try {
-    await instance.loadModel(files, loadOptions({...config, n_gpu_layers:gpuLayers}));
-    return {instance, gpuLayers, fallbackReason:null};
-  } catch (gpuError) {
-    if (gpuLayers === 0 || gpuError?.name === 'AbortError') throw gpuError;
-    await instance.exit().catch(() => {});
-    onStatus('Не удалось инициализировать модель с GPU. Пробуем CPU на тех же файлах; это может быть значительно медленнее.');
-    let fallback = null;
-    try {
-      fallback = await makeEngine();
-      await fallback.loadModel(files, loadOptions({...config, n_gpu_layers:0}));
-      return {instance:fallback, gpuLayers:0, fallbackReason:'gpu-init-failed'};
-    } catch (cpuError) {
-      if (fallback) await fallback.exit().catch(() => {});
-      if (cpuError?.name === 'AbortError') throw cpuError;
-      const message = value => String(value?.message || value || 'неизвестная ошибка').slice(0, 1000);
-      throw new Error(`Не удалось инициализировать модель с GPU: ${message(gpuError)}. Повтор на CPU тоже не удался: ${message(cpuError)}.`);
+  const ceiling = Number.isSafeInteger(config.n_ctx) && config.n_ctx > 0 ? config.n_ctx : CONTEXT_ATTEMPTS[0];
+  const contexts = [...new Set([ceiling, ...CONTEXT_ATTEMPTS.filter(n => n < ceiling)])];
+  const backends = gpuLayers === 0 ? [0] : [gpuLayers, 0];
+  const failures = [];
+  let current = instance;
+  for (const backend of backends) {
+    for (const nCtx of contexts) {
+      if (!current) current = await makeEngine();
+      const label = backend === 0 ? 'CPU' : 'GPU запрошен';
+      onStatus(`Инициализация: ${label}, контекст ${nCtx.toLocaleString('ru-RU')} токенов…`);
+      try {
+        await current.loadModel(files, loadOptions({...config, n_ctx:nCtx, n_gpu_layers:backend}));
+        return {instance:current, gpuLayers:backend, fallbackReason: backend === 0 && gpuLayers !== 0 ? 'gpu-init-failed' : null, nCtx};
+      } catch (error) {
+        await current.exit().catch(() => {});
+        current = null;
+        if (error?.name === 'AbortError') throw error;
+        const message = String(error?.message || error || 'неизвестная ошибка').slice(0, 500);
+        failures.push(`${label}, ${nCtx}: ${message}`);
+        onStatus(`Не удалось инициализировать модель: ${label}, контекст ${nCtx.toLocaleString('ru-RU')}. ${message}`);
+        // Runtime errors are not reliably typed as OOM. Stop only for errors
+        // that clearly cannot be fixed by changing allocation or backend.
+        if (/invalid (?:gguf|magic|model file)|unsupported (?:model|architecture)|(?:model )?file (?:not found|missing)|corrupt(?:ed)? (?:gguf|model)|http (?:401|403|404)/i.test(message)) throw error;
+      }
     }
+    if (backend !== 0) onStatus('Попытки с GPU не удались. Пробуем CPU на тех же файлах; это может быть значительно медленнее.');
   }
+  throw new Error(`Не удалось инициализировать модель. ${failures.join('; ')}`);
 }
 
 // Download each shard separately so progress includes partially cached models.
@@ -170,6 +184,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     let gpuLayers = await chooseGpuLayers(onStatus);
     const initialGpuLayers = gpuLayers;
     let fallbackReason = null;
+    let nCtx;
     onStatus('Проверяем файлы модели…');
     // modelUrl can point to the first shard of another compatible mirror.
     // The community mirror is discovered at runtime and can disappear or change.
@@ -180,7 +195,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     onStatus('Загружаем модель для текста…');
     const shards = await textShards(instance, resolvedModelUrl, onProgress, modelSource.sizes, token);
     onStatus('Инициализируем модель…');
-    ({instance, gpuLayers, fallbackReason} = await initializeWithCpuFallback(instance, shards, gpuLayers, {}, onStatus));
+    ({instance, gpuLayers, fallbackReason, nCtx} = await initializeWithCpuFallback(instance, shards, gpuLayers, {}, onStatus));
     visionAvailable = false;
     engine = instance;
     activeModelUrl = resolvedModelUrl;
@@ -194,7 +209,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     activeBlobsHaveVision = false;
     activeGpuLayers = gpuLayers;
     activeFallbackReason = gpuLayers === 0 ? (fallbackReason || (initialGpuLayers === 0 ? 'adapter-unavailable' : null)) : null;
-    rememberLoadedConfig(instance, {n_gpu_layers:gpuLayers});
+    rememberLoadedConfig(instance, {n_gpu_layers:gpuLayers, n_ctx:nCtx});
     onStatus(gpuLayers === 0 ? 'Модель готова для текста на CPU; работа может быть медленной' : 'Модель готова для текста; запрошен GPU');
     return { vision: false, backend:gpuLayers === 0 ? 'cpu' : 'gpu-requested' };
   } catch (error) {
@@ -214,6 +229,7 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
     let gpuLayers = await chooseGpuLayers(onStatus);
     const initialGpuLayers = gpuLayers;
     let fallbackReason = null;
+    let nCtx;
     onStatus('Проверяем локальные файлы…');
     const { shards, projector, files } = await prepareLocalModel(modelFiles, projectorFile);
     // Validate input and resolve the runtime before discarding a working engine.
@@ -226,7 +242,7 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
       await old.exit();
     }
     onStatus('Инициализируем локальную модель…');
-    ({instance, gpuLayers, fallbackReason} = await initializeWithCpuFallback(instance, files, gpuLayers, {}, onStatus));
+    ({instance, gpuLayers, fallbackReason, nCtx} = await initializeWithCpuFallback(instance, files, gpuLayers, {}, onStatus));
     const hasVision = instance.supportInputModality('image');
     if (projector && !hasVision) throw new Error('Движок не распознал компонент для картинок.');
     engine = instance;
@@ -241,7 +257,7 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
     activeBlobsHaveVision = visionAvailable;
     activeGpuLayers = gpuLayers;
     activeFallbackReason = gpuLayers === 0 ? (fallbackReason || (initialGpuLayers === 0 ? 'adapter-unavailable' : null)) : null;
-    rememberLoadedConfig(engine, {n_gpu_layers:gpuLayers});
+    rememberLoadedConfig(engine, {n_gpu_layers:gpuLayers, n_ctx:nCtx});
     onStatus(gpuLayers === 0 ? 'Локальная модель готова на CPU; работа может быть медленной' : (visionAvailable ? 'Локальная модель готова для текста и картинок' : 'Локальная модель готова для текста'));
     return { vision: visionAvailable, backend:gpuLayers === 0 ? 'cpu' : 'gpu-requested' };
   } catch (err) {
@@ -281,19 +297,21 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {},
     next = await makeEngine();
     let gpuLayers = activeGpuLayers ?? 99999;
     let fallbackReason = null;
-    ({instance:next, gpuLayers, fallbackReason} = await initializeWithCpuFallback(next, [...shards, projector], gpuLayers, activeConfig, onStatus));
+    let nCtx;
+    ({instance:next, gpuLayers, fallbackReason, nCtx} = await initializeWithCpuFallback(next, [...shards, projector], gpuLayers, activeConfig, onStatus));
     if (!next.supportInputModality('image')) throw new Error('Движок не распознал компонент для картинок.');
     engine = next;
     next = null;
     activeGpuLayers = gpuLayers;
     activeFallbackReason = gpuLayers === 0 ? (fallbackReason || activeFallbackReason) : null;
-    activeConfig = {...activeConfig, n_gpu_layers:gpuLayers};
+    rememberLoadedConfig(engine, {...activeConfig, n_ctx:nCtx, n_gpu_layers:gpuLayers}, false);
     visionAvailable = true;
     activeModelBlobs = [...shards, projector];
     activeBlobsHaveVision = true;
     onStatus('Модель готова для текста и картинок');
   } catch (err) {
     if (next) await next.exit().catch(() => {});
+    if (err?.name === 'AbortError') throw err;
     const recovery = engine ? 'Текстовая модель осталась доступна; можно повторить попытку с картинкой.' : (activeMode === 'local' ? 'Нажми «Загрузить свои файлы» ещё раз, чтобы восстановить модель.' : 'Нажми «Загрузить» ещё раз, чтобы восстановить текстовый режим.');
     throw new Error(`Не удалось включить картинки: ${err?.message || err}. ${recovery}`);
   } finally {
@@ -321,10 +339,13 @@ export async function generate({ prompt, image = null, previousCode = '', onToke
       const bytes = image instanceof ArrayBuffer ? image : await image.arrayBuffer();
       content = [{ type: 'image', data: bytes }, { type: 'text', text }];
     }
+    const maxTokens = getLoadedContextInfo()?.output_token_limit;
+    if (!maxTokens) throw new Error('Не удалось определить размер контекста загруженной модели.');
     const stream = await engine.createChatCompletion({
       messages: [{ role: 'system', content: system }, { role: 'user', content }],
       stream: true,
-      max_tokens: 4096,
+      max_tokens: maxTokens,
+      stream_options: { include_usage: true },
       temperature: 0.7,
       top_p: 0.95,
       top_k: 20,
@@ -339,7 +360,7 @@ export async function generate({ prompt, image = null, previousCode = '', onToke
       if (chunk.timings && typeof chunk.timings === 'object') latestTimings = chunk.timings;
       if (chunk.usage && typeof chunk.usage === 'object') latestUsage = chunk.usage;
       if (typeof chunk.choices?.[0]?.finish_reason === 'string') finishReason = chunk.choices[0].finish_reason;
-      if (chunk.timings || chunk.usage || chunk.choices?.[0]?.finish_reason) onMetrics({ timings: latestTimings, usage: latestUsage, finishReason, maxTokens: 4096 });
+      if (chunk.timings || chunk.usage || chunk.choices?.[0]?.finish_reason) onMetrics({ timings: latestTimings, usage: latestUsage, finishReason, maxTokens });
       const delta = chunk.choices?.[0]?.delta?.content || '';
       if (delta) { result += delta; onToken(delta, result); }
     }
@@ -439,7 +460,7 @@ export function getLoadedContextInfo() {
   try {
     const source = engine.getLoadedContextInfo();
     out = {};
-    for (const key of ['n_ctx', 'n_batch', 'n_ubatch']) {
+    for (const key of ['n_ctx', 'n_ctx_train', 'n_batch', 'n_ubatch']) {
       if (Number.isSafeInteger(source?.[key]) && source[key] > 0) out[key] = source[key];
     }
     if (typeof source?.has_image_input === 'boolean') out.has_image_input = source.has_image_input;
@@ -447,7 +468,17 @@ export function getLoadedContextInfo() {
       const count = engine.getNumThreads();
       if (Number.isSafeInteger(count) && count > 0) out.n_threads = count;
     }
-  } catch { out = { ...activeConfig }; }
+  } catch { out = {}; }
+  // wllama reports the requested n_ctx; llama.cpp caps its slot by
+  // n_ctx_train when known. Neither reports the remaining output after input.
+  if (!out.n_ctx && Number.isSafeInteger(activeConfig.n_ctx) && activeConfig.n_ctx > 0) {
+    out.n_ctx = activeConfig.n_ctx;
+    out.n_ctx_is_requested = true;
+  }
+  if (out.n_ctx) {
+    out.output_token_limit = out.n_ctx_train ? Math.min(out.n_ctx, out.n_ctx_train) : out.n_ctx;
+    out.output_token_limit_is_estimate = !out.n_ctx_train;
+  }
   // A GPU adapter probe is not evidence of actual offload. Publish the two
   // integers only when reported by this worker's native llama.cpp log.
   const offload = offloadCollectors.get(engine)?.getResult();
@@ -498,12 +529,12 @@ async function switchBenchmarkConfig(config, signal) {
     next = await makeEngine();
     // wllama does not expose cancellation for loadModel: cancellation is
     // checked immediately after initialization and the worker is then freed.
-    await next.loadModel([...activeModelBlobs], loadOptions(selected));
+    await next.loadModel([...activeModelBlobs], loadOptions({...selected, n_ctx:activeConfig.n_ctx}));
     aborted(signal);
     if (activeBlobsHaveVision && !next.supportInputModality('image')) throw new Error('Не удалось восстановить поддержку изображений.');
     engine = next;
     next = null;
-    activeConfig = selected;
+    rememberLoadedConfig(engine, {...selected, n_ctx:activeConfig.n_ctx, n_gpu_layers:activeGpuLayers}, false);
     visionAvailable = activeBlobsHaveVision;
   } finally {
     if (next) await next.exit().catch(() => {});

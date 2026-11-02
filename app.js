@@ -233,7 +233,7 @@ function agentGenerate(context) {
   return async args => {
     // Per-attempt overrides let the agent save the output budget after a
     // length-limited response without changing the user's checkbox.
-    const thinking = typeof args.thinking === 'boolean' ? args.thinking : ui['agent-thinking'].checked;
+    const thinking = ui['agent-thinking'].checked;
     const call = trace.toolStart('Генерация модели', {prompt:args.prompt, previousCode:args.previousCode || '', image:args.image, thinking});
     try {
       let finishReason = null;
@@ -248,7 +248,7 @@ function agentGenerate(context) {
         },
       });
       trace.toolFinish(call, {output});
-      if (finishReason === 'length') trace.stage('Достигнут лимит вывода или контекста', 'Размышления и картинка тоже занимают контекст; при необходимости отключи размышления или упрости запрос.');
+      if (finishReason === 'length') trace.stage('Достигнут лимит вывода или контекста', 'Запрос, изображения, размышления и ответ занимают общее окно контекста. Часть окна уже занята входными данными.');
       return {text:output, finishReason};
     } catch (err) {
       trace.toolFinish(call, {error:err});
@@ -341,7 +341,9 @@ async function runLateRepair(session) {
   try {
     const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:scene, initialErrors:[diagnostic], generate:agentGenerate(traceContext),
       validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext), signal:agentController.signal, maxAttempts:2});
-    if (!result.ok) throw new Error((result.errors || []).join('; ') || 'Не удалось исправить ошибку.');
+    if (!result.ok) throw new Error(result.reason === 'output_limit'
+      ? 'Достигнут лимит вывода или контекста до получения полного HTML. Полученные фрагменты доступны в трассе; предыдущая сцена сохранена.'
+      : (result.errors || []).join('; ') || 'Не удалось исправить ошибку.');
     if (activeScene !== session || ui['preview-frame'] !== oldFrame || !selected.frame) throw new Error('Сцена изменилась во время исправления.');
     adoptCandidate(selected.frame, result.html);
     session.frame = selected.frame;
@@ -489,6 +491,9 @@ ui['prompt-form'].addEventListener('submit', async event => {
     });
     if (!result.ok) {
       const details = (result.errors || []).join('; ') || 'Проверка не завершилась успешно.';
+      if (result.reason === 'output_limit') {
+        throw new Error(`Достигнут лимит вывода или контекста до получения полного HTML. Полученные фрагменты доступны в трассе. ${scene ? 'Предыдущая сцена сохранена.' : 'Сцена пока не создана.'}`);
+      }
       throw new Error(`Не удалось получить рабочую сцену за ${result.attempts} попыток. ${details}`);
     }
     if (!selected.frame) throw new Error('Проверенная сцена недоступна для предпросмотра.');

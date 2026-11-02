@@ -5,13 +5,14 @@ const inferenceSource = await readFile(new URL('../inference.js', import.meta.ur
 const collectorSource = await readFile(new URL('../gpu-engine-log.js', import.meta.url),'utf8');
 const instances = [];
 let nextFailure = null;
+let failuresRemaining = 0;
 const navigator = {hardwareConcurrency:4,gpu:{requestAdapter:async()=>({})}};
 const context = vm.createContext({navigator,isSecureContext:true,crossOriginIsolated:false,console,Blob,URL,ArrayBuffer,Uint8Array,DOMException,AbortController,Promise,Math,setTimeout,clearTimeout});
 async function synth(values) {const m=new vm.SyntheticModule(Object.keys(values),function(){for(const [k,v] of Object.entries(values))this.setExport(k,v)},{context});await m.link(()=>{});await m.evaluate();return m;}
 class Wllama {
   constructor(_path, config) {this.logger=config.logger;instances.push(this)}
   setCompat(){}
-  async loadModel(files,opts) {this.files=files;this.opts=opts;if(nextFailure){const fail=nextFailure;nextFailure=null;throw new Error(fail)}}
+  async loadModel(files,opts) {this.files=files;this.opts=opts;if(failuresRemaining){failuresRemaining--;throw new Error(nextFailure)}}
   async exit(){}
   supportInputModality(){return this.files.length > 1}
   getLoadedContextInfo(){return {n_ctx:8192}}
@@ -48,7 +49,7 @@ navigator.gpu={requestAdapter:async()=>null};await api.loadLocalModel(shard,null
 assert.equal(api.getModelState().fallbackReason,'adapter-unavailable');assert.equal(api.getLoadedContextInfo().backend_fallback_reason,'adapter-unavailable');
 await api.setLocalProjector(projector);await api.ensureVision();assert.equal(api.getModelState().fallbackReason,'adapter-unavailable');
 await api.unloadModel();assert.equal(api.getModelState().fallbackReason,null);
-navigator.gpu={requestAdapter:async()=>({})};nextFailure='private error text';await api.loadLocalModel(shard,null);
+navigator.gpu={requestAdapter:async()=>({})};nextFailure='private error text';failuresRemaining=6;await api.loadLocalModel(shard,null);
 assert.equal(api.getModelState().fallbackReason,'gpu-init-failed');assert.equal(api.getLoadedContextInfo().backend_fallback_reason,'gpu-init-failed');
 assert(!JSON.stringify(api.getLoadedContextInfo()).includes('private error text'));
 await api.unloadModel();
