@@ -1,5 +1,6 @@
 import { prepareLocalModel, validateProjectorFile } from './local-model.js';
 import { downloadFiles, modelShardUrls } from './progress-download.js';
+import { createOffloadLogCollector } from './gpu-engine-log.js';
 // Browser-local GGUF inference, using Wllama's OpenAI-compatible v3 API.
 // Inference never leaves the device; runtime and weights are downloaded on load.
 const WLLAMA_VERSION = '3.8.1';
@@ -24,6 +25,9 @@ let activeModelBlobs = [];
 let activeBlobsHaveVision = false;
 let activeConfig = {};
 let baselineConfig = {};
+// Each engine gets its own bounded collector: data from a previous worker must
+// never be presented as the active model's actual offload.
+const offloadCollectors = new WeakMap();
 
 // Never forward a Hugging Face credential to a custom host or CDN.
 function hfHeaders(url, token) {
@@ -61,7 +65,9 @@ function rememberLoadedConfig(instance, configured = {}) {
 
 async function makeEngine() {
   const { Wllama } = await import(WLLAMA_ESM);
-  const instance = new Wllama({ default: WLLAMA_WASM }, { parallelDownloads: 3, allowOffline: true });
+  const collector = createOffloadLogCollector();
+  const instance = new Wllama({ default: WLLAMA_WASM }, { parallelDownloads: 3, allowOffline: true, logger: collector.logger });
+  offloadCollectors.set(instance, collector);
   instance.setCompat('default', 'firefox_safari');
   return instance;
 }
@@ -365,9 +371,10 @@ export function getModelState() {
 /** Only expose capability numbers, never full model metadata or prompts. */
 export function getLoadedContextInfo() {
   if (!engine) return null;
+  let out;
   try {
     const source = engine.getLoadedContextInfo();
-    const out = {};
+    out = {};
     for (const key of ['n_ctx', 'n_batch', 'n_ubatch']) {
       if (Number.isSafeInteger(source?.[key]) && source[key] > 0) out[key] = source[key];
     }
@@ -376,8 +383,15 @@ export function getLoadedContextInfo() {
       const count = engine.getNumThreads();
       if (Number.isSafeInteger(count) && count > 0) out.n_threads = count;
     }
-    return out;
-  } catch { return { ...activeConfig }; }
+  } catch { out = { ...activeConfig }; }
+  // A GPU adapter probe is not evidence of actual offload. Publish the two
+  // integers only when reported by this worker's native llama.cpp log.
+  const offload = offloadCollectors.get(engine)?.getResult();
+  if (offload) {
+    out.gpu_layers_offloaded = offload.gpuLayers;
+    out.gpu_layers_total = offload.totalLayers;
+  }
+  return out;
 }
 
 function normalizeBenchmarkConfig(config) {

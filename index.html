@@ -34,7 +34,7 @@
         </div>
         <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
         <div class="bundle-feedback"><p id="bundle-result" role="status" aria-live="polite" hidden></p><button id="cancel-bundle" type="button" hidden>Отменить скачивание ZIP</button></div>
-        <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Нужен WebGPU; совместимость проверяется.</p>
+        <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Движок запрашивает перенос всех слоёв на GPU через WebGPU; фактическое размещение зависит от браузера и устройства.</p>
         <details class="hf-token-settings">
           <summary>Токен Hugging Face (необязательно)</summary>
           <label for="hf-token">Токен с правом чтения</label>
