@@ -201,7 +201,12 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
       const warnings = [];
       if (p.canvasCount === 0) errors.push('В сцене не появился canvas для 3D-рендеринга.');
       else if (p.visibleCanvasCount === 0) errors.push('Canvas сцены не имеет видимого размера.');
-      if (p.webglContexts === 0) errors.push('Сцена не создала доступный WebGL-контекст.');
+      // webglContexts counts contexts that are still active at the time of
+      // validation. A lost context was created earlier; don't report that it
+      // was never created. The loss itself is already in observed errors.
+      if (p.webglContexts === 0 && !observed.some(item => item.kind === 'webgl-context-lost')) {
+        errors.push('Активный WebGL-контекст не обнаружен.');
+      }
       if (p.webglContexts > 0 && p.drawCalls === 0) {
         if (p.drawObservationAvailable) errors.push('WebGL-контекст есть, но вызовы отрисовки не обнаружены; сцена может быть пустой.');
         else warnings.push('Не удалось проверить вызовы WebGL-отрисовки.');
