@@ -29,11 +29,21 @@
         <div class="model-card">
           <div class="model-icon" aria-hidden="true">✳</div>
           <div class="model-copy"><strong>3D Coder</strong><span id="model-status" role="status" aria-live="polite">Модель не загружена</span></div>
-          <div class="model-actions"><button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button><button id="open-local" class="local-open-button" type="button" aria-controls="local-files" aria-expanded="false">С компьютера</button></div>
+          <div class="model-actions"><button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button><button id="open-local" class="local-open-button" type="button" aria-controls="local-files" aria-expanded="false">С компьютера</button><a class="local-open-button download-primary" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/Qwen3.5-4B-3D-Coder-Q4_K_M.gguf?download=true" target="_blank" rel="noopener noreferrer">Скачать модель ↓</a></div>
         </div>
         <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
         <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Нужен WebGPU; совместимость проверяется.</p>
         <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p></div>
+        <details class="download-files" id="download-files">
+          <summary>Скачать файлы на компьютер</summary>
+          <p>Скачай файлы отдельно из Hugging Face. Они сохраняются на компьютер и не загружаются в Forma автоматически. Ход скачивания смотри в загрузках браузера.</p>
+          <div class="download-actions">
+            <a id="download-model-file" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/Qwen3.5-4B-3D-Coder-Q4_K_M.gguf?download=true" target="_blank" rel="noopener noreferrer">Модель Q4_K_M · 2,71 ГБ ↓</a>
+            <a href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/mmproj-Qwen3.5-4B-BF16.gguf?download=true" target="_blank" rel="noopener noreferrer">Для картинок (mmproj) · 676 МБ ↓</a>
+          </div>
+          <p>Файл модели целиком подойдёт для других совместимых программ. Чтобы загрузить его в Forma, сначала раздели его на части не больше 2 ГиБ через llama-gguf-split. Для генерации только по тексту mmproj не нужен.</p>
+          <p>Доступ к Hugging Face зависит от твоей сети. Есть <a href="https://gethologram.ai/models/ccore/Qwen3.5-4B-3D-Coder/" target="_blank" rel="noopener noreferrer">сторонний каталог Hologram ↗</a>; его доступность и загрузка из РФ не проверены.</p>
+        </details>
         <details class="local-files" id="local-files">
           <summary>Свои файлы модели</summary>
           <p>Выбери один GGUF-файл до 2 ГиБ или все части модели одновременно. Большой файл сначала нужно разделить через llama-gguf-split. Для картинок добавь отдельный файл mmproj.</p>
