@@ -33,6 +33,17 @@
         </div>
         <div class="progress-wrap"><progress id="model-progress" max="100" value="0" aria-label="Загрузка модели" hidden></progress></div>
         <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. Нужен WebGPU; совместимость проверяется.</p>
+        <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p></div>
+        <details class="local-files">
+          <summary>Свои файлы модели</summary>
+          <p>Выбери все части GGUF-модели и, если нужен ввод картинок, отдельный файл mmproj. Части должны быть не больше 2 ГиБ каждая; большой файл нужно предварительно разделить через llama-gguf-split.</p>
+          <label for="model-files">Части модели (.gguf)</label>
+          <input id="model-files" type="file" accept=".gguf" multiple>
+          <label for="projector-file">Компонент для картинок (.gguf), необязательно</label>
+          <input id="projector-file" type="file" accept=".gguf">
+          <button id="load-local" type="button">Загрузить свои файлы</button>
+          <p>Файлы останутся на устройстве; после перезагрузки страницы их нужно выбрать снова. Движок и предпросмотр всё ещё загружаются с внешних CDN.</p>
+        </details>
 
         <div class="chat-zone" id="chat-log" aria-live="polite" aria-label="История диалога">
           <div class="welcome-message"><span class="message-avatar" aria-hidden="true">✳</span><div><div class="message-label">FORMA <span>·</span> ГОТОВА К ИДЕЯМ</div><p>Привет! Что сегодня создадим? Можно начать с простой идеи или загрузить изображение для вдохновения.</p></div></div>

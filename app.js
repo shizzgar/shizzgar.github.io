@@ -1,7 +1,8 @@
-import { loadModel, ensureVision, generate, getModelState } from './inference.js';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, getModelState } from './inference.js';
+import { checkConnectivity } from './diagnostics.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','model-status','model-progress','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','model-status','model-progress','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result'].map(id => [id, $(id)]));
 let scene = '';
 let image = null;
 let imageUrl = null;
@@ -26,6 +27,9 @@ function setBusy(value) {
   busy = value;
   ui['generate-button'].disabled = value;
   ui['load-model'].disabled = value || getModelState().loaded;
+  ui['load-local'].disabled = value;
+  ui['model-files'].disabled = value;
+  ui['projector-file'].disabled = value;
   ui['image-input'].disabled = value;
 }
 function updateProgress({loaded, total}) {
@@ -72,6 +76,35 @@ ui['load-model'].addEventListener('click', async () => {
     error(e?.message || String(e));
   } finally { setBusy(false); }
 });
+ui['check-connectivity'].addEventListener('click', async () => {
+  const button = ui['check-connectivity'];
+  const output = ui['connectivity-result'];
+  button.disabled = true; output.hidden = false; output.textContent = 'Проверяем доступ с твоего устройства…';
+  try {
+    const results = await checkConnectivity();
+    output.textContent = results.map(item => `${item.label}: ${item.status === 'ok' ? 'доступен' : 'не удалось проверить'} — ${item.detail}`).join('\n') + '\nЭто проверка соединения, а не гарантия полной загрузки.';
+  } catch (e) { output.textContent = `Не удалось выполнить проверку: ${e?.message || String(e)}`; }
+  finally { button.disabled = false; }
+});
+ui['load-local'].addEventListener('click', async () => {
+  if (busy) return;
+  setBusy(true); error('');
+  ui['model-progress'].hidden = false; ui['model-progress'].removeAttribute('value');
+  try {
+    const result = await loadLocalModel(ui['model-files'].files, ui['projector-file'].files?.[0] || null, {
+      onStatus: text => { ui['model-status'].textContent = text; },
+    });
+    ui['model-progress'].hidden = true;
+    ui['load-model'].textContent = 'Готово ✓';
+    ui['model-status'].textContent = result.vision ? 'Локальная модель: текст и картинки' : 'Локальная модель: текст';
+    appendMessage('FORMA · ЛОКАЛЬНАЯ МОДЕЛЬ', result.vision ? 'Можно описать сцену или приложить картинку.' : 'Можно создавать сцены по тексту. Для картинки выбери файл mmproj в разделе своих файлов.');
+  } catch (e) {
+    ui['model-progress'].hidden = true;
+    if (!getModelState().loaded) { ui['model-status'].textContent = 'Модель не загружена'; ui['load-model'].textContent = 'Загрузить ↗'; }
+    else { ui['model-status'].textContent = getModelState().vision ? 'Готова для текста и картинок' : 'Готова для текста'; }
+    error(e?.message || String(e));
+  } finally { setBusy(false); }
+});
 ui['prompt-form'].addEventListener('submit', async event => {
   event.preventDefault();
   if (busy) return;
@@ -83,6 +116,11 @@ ui['prompt-form'].addEventListener('submit', async event => {
   ui['preview-status'].textContent = 'Генерирую сцену…';
   try {
     if (image && !getModelState().vision) {
+      if (getModelState().mode === 'local') {
+        const projector = ui['projector-file'].files?.[0];
+        if (!projector) throw new Error('Для картинки выбери файл mmproj в разделе «Свои файлы модели».');
+        await setLocalProjector(projector);
+      }
       status.textContent = 'Загружаю компонент для картинок и перезапускаю модель…';
       ui['model-progress'].hidden = false;
       ui['model-progress'].removeAttribute('value');

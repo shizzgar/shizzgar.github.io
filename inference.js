@@ -1,3 +1,4 @@
+import { prepareLocalModel, validateProjectorFile } from './local-model.js';
 // Browser-local GGUF inference, using Wllama's OpenAI-compatible v3 API.
 // Inference never leaves the device; runtime and weights are downloaded on load.
 const WLLAMA_VERSION = '3.8.1';
@@ -12,6 +13,9 @@ let running = false;
 let visionAvailable = false;
 let activeModelUrl = '';
 let activeProjectorUrl = PROJECTOR_URL;
+let activeMode = 'remote';
+let localShards = [];
+let localProjector = null;
 
 function loadOptions(onProgress) {
   return {
@@ -102,6 +106,9 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     engine = instance;
     activeModelUrl = resolvedModelUrl;
     activeProjectorUrl = projectorUrl;
+    activeMode = 'remote';
+    localShards = [];
+    localProjector = null;
     onStatus('Модель готова для текста');
     return { vision: false };
   } catch (error) {
@@ -110,6 +117,52 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
   } finally {
     loading = false;
   }
+}
+
+/** Load explicitly selected GGUF files; these File objects last only for the tab session. */
+export async function loadLocalModel(modelFiles, projectorFile = null, { onStatus = () => {} } = {}) {
+  if (loading || running) throw new Error('Модель уже занята.');
+  if (!globalThis.isSecureContext || !navigator.gpu) throw new Error('Нужны HTTPS и браузер с WebGPU.');
+  loading = true;
+  let instance = null;
+  try {
+    onStatus('Проверяем локальные файлы…');
+    const { shards, projector, files } = await prepareLocalModel(modelFiles, projectorFile);
+    // Validate input and resolve the runtime before discarding a working engine.
+    onStatus('Загружаем движок…');
+    instance = await makeEngine();
+    if (engine) {
+      const old = engine;
+      engine = null;
+      visionAvailable = false;
+      await old.exit();
+    }
+    onStatus('Инициализируем локальную модель…');
+    await instance.loadModel(files, loadOptions(() => {}));
+    const hasVision = instance.supportInputModality('image');
+    if (projector && !hasVision) throw new Error('Движок не распознал компонент для картинок.');
+    engine = instance;
+    instance = null;
+    activeMode = 'local';
+    activeModelUrl = '';
+    localShards = shards;
+    localProjector = projector;
+    visionAvailable = Boolean(projector && hasVision);
+    onStatus(visionAvailable ? 'Локальная модель готова для текста и картинок' : 'Локальная модель готова для текста');
+    return { vision: visionAvailable };
+  } catch (err) {
+    if (instance) await instance.exit().catch(() => {});
+    throw err;
+  } finally {
+    loading = false;
+  }
+}
+
+/** Keep a local projector available for the next vision initialization. */
+export async function setLocalProjector(file) {
+  if (loading || running) throw new Error('Модель уже занята.');
+  if (activeMode !== 'local' || !engine) throw new Error('Сначала загрузи локальную модель.');
+  localProjector = await validateProjectorFile(file);
 }
 
 /** Download the projector only when needed and reload the model using cached shards. */
@@ -122,9 +175,10 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {} 
   let old = engine;
   try {
     // Keep the text engine usable if the projector download fails.
-    onStatus('Загружаем компонент для картинок…');
-    const projector = await projectorBlob(old, activeProjectorUrl, onProgress);
-    const shards = await textShards(old, activeModelUrl, () => {});
+    onStatus(activeMode === 'local' ? 'Проверяем локальный компонент для картинок…' : 'Загружаем компонент для картинок…');
+    if (activeMode === 'local' && !localProjector) throw new Error('Выбери локальный файл mmproj в разделе «Свои файлы модели».');
+    const projector = activeMode === 'local' ? localProjector : await projectorBlob(old, activeProjectorUrl, onProgress);
+    const shards = activeMode === 'local' ? localShards : await textShards(old, activeModelUrl, () => {});
     onStatus('Перезапускаем модель для картинок…');
     engine = null;
     visionAvailable = false;
@@ -139,7 +193,7 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {} 
     onStatus('Модель готова для текста и картинок');
   } catch (err) {
     if (next) await next.exit().catch(() => {});
-    const recovery = engine ? 'Текстовая модель осталась доступна; можно повторить попытку с картинкой.' : 'Нажми «Загрузить» ещё раз, чтобы восстановить текстовый режим.';
+    const recovery = engine ? 'Текстовая модель осталась доступна; можно повторить попытку с картинкой.' : (activeMode === 'local' ? 'Нажми «Загрузить свои файлы» ещё раз, чтобы восстановить модель.' : 'Нажми «Загрузить» ещё раз, чтобы восстановить текстовый режим.');
     throw new Error(`Не удалось включить картинки: ${err?.message || err}. ${recovery}`);
   } finally {
     loading = false;
@@ -189,7 +243,7 @@ export async function generate({ prompt, image = null, previousCode = '', onToke
 }
 
 export function getModelState() {
-  return { loaded: Boolean(engine), loading, running, vision: visionAvailable };
+  return { loaded: Boolean(engine), loading, running, vision: visionAvailable, mode: activeMode };
 }
 
 export async function unloadModel() {
@@ -197,5 +251,7 @@ export async function unloadModel() {
   const old = engine;
   engine = null;
   visionAvailable = false;
+  localShards = [];
+  localProjector = null;
   if (old) await old.exit();
 }
