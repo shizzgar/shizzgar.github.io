@@ -231,11 +231,14 @@ function agentEvents(status, context) {
 }
 function agentGenerate(context) {
   return async args => {
-    const call = trace.toolStart('Генерация модели', {prompt:args.prompt, previousCode:args.previousCode || '', image:args.image, thinking:ui['agent-thinking'].checked});
+    // Per-attempt overrides let the agent save the output budget after a
+    // length-limited response without changing the user's checkbox.
+    const thinking = typeof args.thinking === 'boolean' ? args.thinking : ui['agent-thinking'].checked;
+    const call = trace.toolStart('Генерация модели', {prompt:args.prompt, previousCode:args.previousCode || '', image:args.image, thinking});
     try {
       let finishReason = null;
       const output = await generate({
-        ...args, thinking:ui['agent-thinking'].checked,
+        ...args, thinking,
         onReasoning: delta => trace.event({type:'reasoning', attempt:context.attempt, maxAttempts:context.maxAttempts, delta}),
         onMetrics: metrics => {
           if (typeof metrics?.finishReason === 'string') finishReason = metrics.finishReason;

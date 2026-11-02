@@ -184,7 +184,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
     if (e.type === 'token' || e.type === 'reasoning') { addChunk(e); return; }
     const attempt = Number.isFinite(e.attempt) ? e.attempt : 0;
     const suffix = attempt ? ` · попытка ${attempt}${e.maxAttempts ? `/${e.maxAttempts}` : ''}` : '';
-    if (['generating', 'validating', 'validation_failed', 'repairing', 'success', 'failed'].includes(e.type)) flushStreams();
+    if (['generating', 'validating', 'validation_failed', 'repairing', 'retry_without_thinking', 'success', 'failed'].includes(e.type)) flushStreams();
     switch (e.type) {
       case 'generating':
         // TTFT is per generation, including prefill; do not include validation.
@@ -193,6 +193,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
       case 'validating': tick(`Проверка запуска${suffix}`, 'Запускаю код и отслеживаю ошибки.'); break;
       case 'validation_failed': tick(`Ошибка проверки${suffix}`, Array.isArray(e.errors) ? e.errors.join('\n') : e.errors, 'error'); break;
       case 'repairing': tick('Исправление', 'Передаю найденные ошибки модели.'); break;
+      case 'retry_without_thinking': tick(`Повтор без размышлений${suffix}`, 'Ответ достиг лимита до завершения HTML. Следующая попытка пройдёт без размышлений, чтобы оставить больше токенов для кода; настройка пользователя не меняется.'); break;
       case 'success': tick('Проверка пройдена', 'Ошибок выполнения за время проверки не обнаружено.', 'success'); break;
       case 'failed': tick('Остановлено с ошибкой', Array.isArray(e.errors) ? e.errors.join('\n') : e.errors, 'error'); badge.textContent = 'ОШИБКА'; badge.dataset.state = 'error'; break;
       default: if (e.type && e.label) tick(e.label, e.detail);

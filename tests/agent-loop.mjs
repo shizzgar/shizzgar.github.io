@@ -69,3 +69,31 @@ const edits=[];
 await runAgent({prompt:'Сделай крышу красной',previousCode:html,generate:async input=>{edits.push(input);return edits.length===1?{text:'<html>truncated',finishReason:'length'}:finalDoc},validate:async()=>({ok:true})});
 assert.equal(edits[1].previousCode,html);
 console.log('PASS final answer extraction and truncated generation recovery');
+
+const retryInputs=[], retryEvents=[];
+const retry=await runAgent({prompt:'Построй маяк', previousCode:html, initialErrors:['сломался рендер'], onEvent:event=>retryEvents.push(event), generate:async input=>{
+  retryInputs.push(input);
+  return retryInputs.length===1 ? {text:'<think>still reasoning',finishReason:'length'}
+    : retryInputs.length===2 ? {text:'',finishReason:'length'} : {text:finalDoc,finishReason:'stop'};
+}, validate:async()=>({ok:true})});
+assert.equal(retry.ok,true);
+assert.equal(retryInputs[0].thinking,undefined,'first attempt preserves caller preference');
+assert.equal(retryInputs[1].thinking,false,'truncated thinking is disabled for retry');
+assert.equal(retryInputs[2].thinking,false,'subsequent retries retain the disabled override');
+assert.equal(retryInputs[1].previousCode,html,'prior working scene survives truncated generation');
+assert.match(retryInputs[1].prompt,/Построй маяк/);
+assert.match(retryInputs[1].prompt,/сломался рендер/,'late repair diagnostic survives truncated answer');
+assert(!retryInputs[1].prompt.includes('still reasoning'),'partial output is not repeated');
+assert.deepEqual(retryEvents.filter(event=>event.type==='retry_without_thinking').map(event=>event.attempt),[2]);
+
+const incompleteInputs=[];
+await runAgent({prompt:'x',generate:async input=>{incompleteInputs.push(input);return incompleteInputs.length===1?{text:'<html>incomplete',finishReason:null}:html},validate:async()=>({ok:true})});
+assert.equal(incompleteInputs[1].thinking,undefined,'unknown finish reason must not trigger an override');
+const fullLengthInputs=[];
+const fullLength=await runAgent({prompt:'x',generate:async input=>{fullLengthInputs.push(input);return {text:html,finishReason:'length'}},validate:async()=>({ok:true})});
+assert.equal(fullLength.ok,true,'a complete HTML at length limit is validated');
+assert.equal(fullLengthInputs.length,1);
+const exhaustedEvents=[];
+await runAgent({prompt:'x',maxAttempts:1,onEvent:e=>exhaustedEvents.push(e),generate:async()=>({text:'',finishReason:'length'}),validate:async()=>({ok:true})});
+assert(!exhaustedEvents.some(event=>event.type==='retry_without_thinking'),'no retry event after last attempt');
+console.log('PASS adaptive reasoning override, bounded retries and truthful events');
