@@ -43,7 +43,11 @@ export function createProfiler(trace) {
         : fallbackReason === 'gpu-init-failed'
         ? 'CPU/WASM: инициализация модели с GPU не удалась'
         : 'CPU/WASM: модель загружена без выгрузки на GPU';
-      const placement = !loadedInfo
+      const placement = modelState.retiring
+        ? 'Остановка движка не завершена; освобождение ресурсов не подтверждено'
+        : modelState.suspended
+        ? 'Модель временно выгружена для показа сцены; файлы сохранены для повторного запуска'
+        : !loadedInfo
         ? 'При загрузке модели GPU или CPU будет выбран автоматически'
         : backend === 'cpu'
         ? cpuPlacement
@@ -57,15 +61,15 @@ export function createProfiler(trace) {
         webglGpu: device.webglRenderer || (device.webglAvailable ? 'имя не раскрыто браузером' : 'недоступен'),
         webglNote: 'Адаптер WebGL может отличаться от используемого моделью через WebGPU.',
         backend: placement,
-        engineWebgpu: !loadedInfo ? 'Модель ещё не загружена' : info.webgpu_initialized === true ? 'Движок сообщил инициализацию WebGPU' : 'Нет подтверждения от движка',
-        modelBuffers: loadedInfo ? buffers : 'Модель ещё не загружена',
+        engineWebgpu: modelState.retiring ? 'Остановка движка не завершена' : modelState.suspended ? 'Движок остановлен для показа сцены' : !loadedInfo ? 'Модель ещё не загружена' : info.webgpu_initialized === true ? 'Движок сообщил инициализацию WebGPU' : 'Нет подтверждения от движка',
+        modelBuffers: modelState.retiring ? 'Актуальные данные недоступны; завершение не подтверждено' : modelState.suspended ? 'Движок остановлен; актуальные данные отсутствуют' : loadedInfo ? buffers : 'Модель ещё не загружена',
         vram: 'Свободная VRAM недоступна из браузера',
         cores: device.logicalCores ?? 'неизвестно',
         memory: device.deviceMemoryGiB ? `≈ ${device.deviceMemoryGiB} ГиБ` : 'неизвестно',
         webgpu: device.adapterAvailable ? 'доступен' : 'не подтверждён',
         threads: info.n_threads ?? (device.wasmThreadsAvailable ? 'доступны' : '1 (без изоляции)'),
         context: info.n_ctx ?? 'неизвестно',
-        outputLimit: info.output_token_limit ?? (loadedInfo ? 'неизвестно' : 'Модель ещё не загружена'),
+        outputLimit: info.output_token_limit ?? (modelState.suspended ? 'Модель временно выгружена' : loadedInfo ? 'неизвестно' : 'Модель ещё не загружена'),
         contextNote: 'Запрос, изображения, размышления и ответ занимают общее окно контекста; доступный для ответа объём может быть меньше потолка.',
         batch: info.n_batch ?? 'по умолчанию',
       });

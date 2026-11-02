@@ -91,3 +91,66 @@ const engineContextError=Object.assign(new Error('kv cache is full'),{type:'kv_c
 const contextFull=await runAgent({prompt:'x',generate:async()=>{throw engineContextError},validate:async()=>({ok:true})});
 assert.equal(contextFull.reason,'context_limit');assert.match(contextFull.errors[0],/контекст модели заполнен/);
 console.log('PASS length limit is reported without reducing thinking or request, no guessed character limit');
+
+// Preflight must reject structural/classic-script syntax problems before a
+// renderer or GPU context is created, then feed diagnostics to the repair.
+const preflightInputs=[], preflightEvents=[]; let preflightValidations=0;
+const badClassic='<html><body><script>const x = ;</script></body></html>';
+const preflightRepair=await runAgent({prompt:'scene',generate:async input=>{preflightInputs.push(input); return preflightInputs.length===1?badClassic:html;},validate:async()=>{preflightValidations++;return {ok:true}},onEvent:e=>preflightEvents.push(e)});
+assert.equal(preflightRepair.ok,true);
+assert.equal(preflightValidations,1,'invalid syntax never reaches renderer');
+assert.equal(preflightInputs[1].previousCode,badClassic);
+assert.match(preflightInputs[1].prompt,/Синтаксическая ошибка JavaScript/);
+assert(preflightEvents.some(e=>e.type==='preflight'));
+let unclosedValidated=false;
+const unclosed=await runAgent({prompt:'scene',maxAttempts:1,generate:async()=>'<html><body><script>const x = 1;</body></html>',validate:async()=>{unclosedValidated=true;return {ok:true}}});
+assert.equal(unclosed.ok,false);assert.equal(unclosedValidated,false);assert.match(unclosed.errors[0],/закрывающий тег/);
+// Compilation never runs the code; module scripts are left to the browser.
+globalThis.__preflightExecuted=false;
+const safeClassic='<html><script>globalThis.__preflightExecuted=true;</script></html>';
+assert.equal((await resultFor(safeClassic)).result.ok,true);
+assert.equal(globalThis.__preflightExecuted,false);
+delete globalThis.__preflightExecuted;
+const moduleDoc='<html><body><script type="module">import * as T from "https://example.test/x.js"; await 1;</script></body></html>';
+assert.equal((await resultFor(moduleDoc)).result.ok,true,'module syntax is not compiled as a classic script');
+const inertData='<html><body><script type="application/ld+json">{ "not javascript": true }</script></body></html>';
+assert.equal((await resultFor(inertData)).result.ok,true);
+const quotedTag='<html><body><div title="literal <script> text"></div><!-- <script> --><script>const x = 1;</script></body></html>';
+assert.equal((await resultFor(quotedTag)).result.ok,true,'quoted attributes and comments do not become scripts');
+const rawText='<html><body><textarea><script>not code</textarea><title><script></title><script>const x = 1;</script></body></html>';
+assert.equal((await resultFor(rawText)).result.ok,true,'inert raw text is not mistaken for a script');
+const inertTemplate='<html><body><template><template><script>const x = ;</script></template></template><script>const y = 1;</script></body></html>';
+assert.equal((await resultFor(inertTemplate)).result.ok,true,'inert template contents are not rejected as executable scripts');
+console.log('PASS non-executing preflight, repair, modules and quoted HTML');
+
+// A known WebGL loss can receive one repair, never an unbounded loop or an
+// inferred recovery from a different infrastructure problem.
+const contextLostResult={ok:false,retryable:false,contextLost:true,infrastructureErrorOther:false,errors:['Потерян контекст WebGL']};
+const lossInputs=[],lossEvents=[];let lossChecks=0;
+const recoveredLoss=await runAgent({prompt:'маяк',image:{id:3},generate:async input=>{lossInputs.push(input);return html},validate:async()=>++lossChecks===1?contextLostResult:{ok:true},onEvent:e=>lossEvents.push(e)});
+assert.equal(recoveredLoss.ok,true);assert.equal(lossChecks,2);assert.equal(lossInputs.length,2);
+assert.equal(lossInputs[1].previousCode,html);assert.match(lossInputs[1].prompt,/Потерян контекст WebGL/);assert.match(lossInputs[1].prompt,/маяк/);
+assert.equal(lossInputs[1].image.id,3);assert.equal(lossInputs[1].thinking,undefined,'reasoning preference is not overridden');
+assert(!/compact|simplif/i.test(lossInputs[1].prompt),'retry must not demand a simplified scene');
+assert.equal(lossEvents.filter(e=>e.type==='context_loss_repair').length,1);
+let repeatedCalls=0;
+const repeatedLoss=await runAgent({prompt:'маяк',generate:async()=>{repeatedCalls++;return html},validate:async()=>contextLostResult});
+assert.equal(repeatedCalls,2);assert.equal(repeatedLoss.reason,'validation_unavailable');assert.equal(repeatedLoss.attempts,2);
+for (const result of [
+  {ok:false,retryable:false,contextLost:true,infrastructureErrorOther:true,errors:['Потерян контекст WebGL','Ошибка CDN']},
+  {ok:false,retryable:false,contextLost:true,errors:['Потерян контекст WebGL']},
+  {ok:false,retryable:false,contextLost:false,infrastructureErrorOther:true,errors:['Ошибка сети']},
+]) {
+  let count=0;
+  const mixed=await runAgent({prompt:'маяк',generate:async()=>{count++;return html},validate:async()=>result});
+  assert.equal(count,1,'a mixed, unclassified or non-WebGL infrastructure problem must not be retried');
+  assert.equal(mixed.reason,'validation_unavailable');
+}
+let sequenceChecks=0;const sequenceEvents=[];
+const mixedRuntime=await runAgent({prompt:'маяк',generate:async()=>html,validate:async()=>{
+  sequenceChecks++;
+  return sequenceChecks===1?{ok:false,errors:['ошибка кода']} : sequenceChecks===2?contextLostResult:{ok:true};
+},onEvent:e=>sequenceEvents.push(e)});
+assert.equal(mixedRuntime.ok,true);assert.equal(sequenceChecks,3,'a regular code repair followed by one context-loss repair is permitted');
+assert.equal(sequenceEvents.filter(e=>e.type==='context_loss_repair').length,1);
+console.log('PASS one bounded WebGL loss repair and mixed infrastructure failures');

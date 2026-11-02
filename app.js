@@ -1,9 +1,9 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, getModelState, getLoadedContextInfo } from './inference.js';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js';
 import { checkConnectivity, checkWebGPU } from './diagnostics.js';
 import { probeInferenceWebGPU } from './webgpu-inference-probe.js';
 import { createBundle } from './bundle-download.js';
 import { runAgent } from './agent-loop.js';
-import { validateScene, disposeScene } from './sandbox-runner.js';
+import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js';
 import { createTracePanel } from './trace-panel.js';
 import { createProfiler } from './profiling-ui.js';
 
@@ -46,7 +46,7 @@ function appendMessage(label, message) {
 function setBusy(value) {
   busy = value;
   ui['generate-button'].disabled = value;
-  ui['load-model'].disabled = value || getModelState().loaded;
+  ui['load-model'].disabled = value || getModelState().loaded || getModelState().suspended;
   ui['open-local'].disabled = value;
   ui['load-local'].disabled = value;
   ui['download-bundle'].disabled = value;
@@ -85,6 +85,14 @@ function formatBytes(bytes) {
 }
 function updateModelStatus() {
   const state = getModelState();
+  if (state.retiring) {
+    ui['model-status'].textContent = 'Не удалось завершить движок · повторим остановку';
+    return;
+  }
+  if (state.suspended) {
+    ui['model-status'].textContent = 'Движок модели остановлен · восстановится перед запросом';
+    return;
+  }
   if (!state.loaded) return;
   const name = state.mode === 'local' ? 'Локальная модель' : 'Модель';
   const modality = state.vision ? 'текст и картинки' : 'текст';
@@ -193,10 +201,96 @@ function createCandidate() {
   ui['preview-frame'].parentElement.appendChild(frame);
   return frame;
 }
-function discardCandidate(frame) {
+async function discardCandidate(frame) {
   if (!frame) return;
-  disposeScene(frame);
-  frame.remove();
+  try {
+    await releaseScene(frame);
+  } catch (err) {
+    trace.stage('Освобождение сцены', `Не удалось подтвердить освобождение ресурсов: ${err?.message || String(err)}`);
+  } finally {
+    frame.remove();
+  }
+}
+// Keep the accepted source, but destroy its iframe before allocating a model.
+// Hiding an iframe is not enough: it continues to retain the WebGL context.
+async function parkScene() {
+  if (!scene || !activeScene || activeScene.parked) return;
+  const old = ui['preview-frame'];
+  const placeholder = document.createElement('iframe');
+  placeholder.id = 'preview-frame';
+  placeholder.title = 'Предпросмотр 3D-сцены';
+  placeholder.hidden = true;
+  old.parentElement.appendChild(placeholder);
+  await discardCandidate(old);
+  ui['preview-frame'] = placeholder;
+  activeScene.frame = placeholder;
+  activeScene.parked = true;
+  ui['preview-status'].textContent = 'Сцена временно приостановлена для модели';
+  trace.stage('Освобождаю ресурсы сцены', 'HTML сохранён; предпросмотр будет восстановлен после генерации.');
+}
+
+async function activateModel(signal) {
+  if (getModelState().loaded) return;
+  if (!getModelState().suspended) throw new Error('Сначала загрузи модель кнопкой выше.');
+  trace.stage('Восстанавливаю модель', 'Файлы модели используются повторно; для движка может понадобиться доступ к CDN.');
+  startStage('Восстанавливаем модель из сохранённых файлов…');
+  try {
+    await resumeModel({signal, onStatus:text => {startStage(text); trace.stage(text);}});
+    profiler.invalidate();
+    await profiler.run().catch(() => {});
+  } finally {
+    finishProgress();
+  }
+}
+
+async function pauseModel() {
+  const state = getModelState();
+  if (!state.loaded && !state.suspended) return;
+  // A failed worker exit can leave a retiring worker behind even when the
+  // state already reads suspended. Retry exit before starting any renderer.
+  if (state.suspended) {
+    await suspendModel();
+    if (state.retiring) {
+      profiler.invalidate();
+      await profiler.run().catch(() => {});
+      updateModelStatus();
+    }
+    return;
+  }
+  trace.stage('Освобождаю ресурсы модели', 'Выгружаю модель перед запуском сцены; её файлы сохранены для следующего запроса.');
+  await suspendModel();
+  profiler.invalidate();
+  await profiler.run().catch(() => {});
+  updateModelStatus();
+}
+
+async function restorePreviousScene() {
+  if (!scene || !activeScene?.parked) return true;
+  const session = activeScene;
+  const selected = {frame:null};
+  try {
+    await pauseModel();
+    const validation = await agentValidator({status:null, session, selected})(scene, {});
+    if (!validation.ok || !selected.frame) {
+      const reason = (validation.errors || []).join('; ') || 'предпросмотр не прошёл проверку';
+      ui['preview-status'].textContent = 'Не удалось восстановить предпросмотр; HTML сохранён';
+      trace.stage('Не удалось восстановить предыдущую сцену', reason);
+      return false;
+    }
+    adoptCandidate(selected.frame, scene);
+    session.frame = selected.frame;
+    session.parked = false;
+    selected.frame = null;
+    ui['preview-status'].textContent = 'Предыдущая сцена восстановлена';
+    trace.stage('Предыдущая сцена восстановлена', 'HTML запущен повторно.');
+    return true;
+  } catch (err) {
+    ui['preview-status'].textContent = 'Не удалось восстановить предпросмотр; HTML сохранён';
+    trace.stage('Не удалось восстановить предыдущую сцену', err?.message || String(err));
+    return false;
+  } finally {
+    await discardCandidate(selected.frame);
+  }
 }
 function adoptCandidate(frame, html) {
   const old = ui['preview-frame'];
@@ -220,6 +314,7 @@ function agentEvents(status, context) {
     const attempt = `${event.attempt}/${event.maxAttempts}`;
     if (event.type === 'generating') status.textContent = `Создаю сцену · попытка ${attempt}…`;
     if (event.type === 'token') status.textContent = `Пишу код · попытка ${attempt} · ${event.length} символов`;
+    if (event.type === 'preflight') status.textContent = `Проверяю структуру кода · попытка ${attempt}…`;
     if (event.type === 'validating') status.textContent = `Запускаю сцену и проверяю ошибки · попытка ${attempt}…`;
     if (event.type === 'repairing') status.textContent = `Исправляю ошибки · следующая попытка ${event.attempt + 1}/${event.maxAttempts}…`;
     if (event.type === 'validation_failed') {
@@ -231,8 +326,8 @@ function agentEvents(status, context) {
 }
 function agentGenerate(context) {
   return async args => {
-    // Per-attempt overrides let the agent save the output budget after a
-    // length-limited response without changing the user's checkbox.
+    await parkScene();
+    await activateModel(args.signal);
     const thinking = ui['agent-thinking'].checked;
     const call = trace.toolStart('Генерация модели', {prompt:args.prompt, previousCode:args.previousCode || '', image:args.image, thinking});
     try {
@@ -258,6 +353,9 @@ function agentGenerate(context) {
 }
 function agentValidator({status, session, selected}) {
   return async (html, {signal}) => {
+    if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+    await pauseModel();
+    if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
     const frame = createCandidate();
     const lateIssues = [];
     let contextLost = false;
@@ -279,20 +377,24 @@ function agentValidator({status, session, selected}) {
         }
         queueLateRepair(session, detail.message);
       }});
+      if (lateIssues.length) {
+        validation.ok = false;
+        // Preserve infrastructure failures detected by the sandbox itself.
+        // A loss observed after its initial result is still a context loss;
+        // do not invent a value for infrastructureErrorOther if unavailable.
+        validation.retryable = validation.retryable !== false && !contextLost;
+        if (contextLost) validation.contextLost = true;
+        validation.errors = [...(validation.errors || []), ...lateIssues];
+      }
       trace.toolFinish(run, validation.ok
         ? {output:{evidence:validation.evidence, warnings:validation.warnings}}
         : {error:(validation.errors || []).join('\n') || 'Проверка не прошла'});
       runFinished = true;
-      if (lateIssues.length) {
-        validation.ok = false;
-        validation.retryable = !contextLost;
-        validation.errors = [...(validation.errors || []), ...lateIssues];
-      }
-      if (validation.ok) selected.frame = frame; else discardCandidate(frame);
+      if (validation.ok) selected.frame = frame; else await discardCandidate(frame);
       return validation;
     } catch (err) {
       if (!runFinished) trace.toolFinish(run, {error:err});
-      discardCandidate(frame);
+      await discardCandidate(frame);
       throw err;
     }
   };
@@ -325,7 +427,6 @@ async function runLateRepair(session) {
   const diagnostic = session.pendingError;
   session.pendingError = null;
   session.lateRepairStarted = true;
-  const oldFrame = session.frame;
   const selected = {frame:null};
   const traceContext = {attempt:0, maxAttempts:2};
   const status = appendMessage('FORMA · ИСПРАВЛЯЮ', 'Сцена сообщила об ошибке после запуска. Исправляю её…');
@@ -344,9 +445,10 @@ async function runLateRepair(session) {
     if (!result.ok) throw new Error(result.reason === 'output_limit'
       ? 'Достигнут лимит вывода или контекста до получения полного HTML. Полученные фрагменты доступны в трассе; предыдущая сцена сохранена.'
       : (result.errors || []).join('; ') || 'Не удалось исправить ошибку.');
-    if (activeScene !== session || ui['preview-frame'] !== oldFrame || !selected.frame) throw new Error('Сцена изменилась во время исправления.');
+    if (activeScene !== session || !selected.frame) throw new Error('Сцена изменилась во время исправления.');
     adoptCandidate(selected.frame, result.html);
     session.frame = selected.frame;
+    session.parked = false;
     selected.frame = null;
     const warning = (result.validation.warnings || []).join(' ');
     status.textContent = redact(warning ? `Ошибка исправлена; замечание проверки: ${warning}` : 'Ошибка исправлена и запуск сцены проверен.');
@@ -355,12 +457,13 @@ async function runLateRepair(session) {
     status.textContent = err?.name === 'AbortError' ? 'Исправление остановлено.' : 'Автоматически исправить сцену не удалось.';
     if (err?.name !== 'AbortError') trace.stage('Не удалось исправить сцену', err?.message || String(err));
     trace.finish(err?.name === 'AbortError' ? 'Остановлено' : 'Ошибка', err?.name === 'AbortError' ? 'done' : 'error');
-    if (activeScene === session && ui['preview-frame'] === oldFrame) {
+    if (activeScene === session) {
       ui['preview-status'].textContent = 'Ошибка во время работы сцены';
       if (err?.name !== 'AbortError') error(`Не удалось исправить ошибку: ${err?.message || String(err)}`);
     }
   } finally {
-    discardCandidate(selected.frame);
+    await discardCandidate(selected.frame);
+    if (activeScene === session && session.parked) await restorePreviousScene();
     agentController = null;
     ui['stop-agent'].hidden = true;
     setBusy(false);
@@ -370,6 +473,7 @@ ui['load-model'].addEventListener('click', async () => {
   if (busy) return;
   setBusy(true); error(''); startStage('Подготавливаем загрузку…');
   try {
+    await parkScene();
     await loadModel({
       onStatus: startStage,
       onProgress: updateProgress,
@@ -387,7 +491,10 @@ ui['load-model'].addEventListener('click', async () => {
     ui['model-status'].textContent = 'Не удалось загрузить модель';
     finishProgress();
     error(e?.message || String(e));
-  } finally { setBusy(false); }
+  } finally {
+    if (activeScene?.parked) await restorePreviousScene();
+    setBusy(false);
+  }
 });
 ui['check-connectivity'].addEventListener('click', async () => {
   const button = ui['check-connectivity'];
@@ -427,6 +534,7 @@ ui['load-local'].addEventListener('click', async () => {
   setBusy(true); error('');
   startStage('Подготавливаем файлы…');
   try {
+    await parkScene();
     const result = await loadLocalModel(ui['model-files'].files, ui['projector-file'].files?.[0] || null, {
       onStatus: startStage,
     });
@@ -438,17 +546,20 @@ ui['load-local'].addEventListener('click', async () => {
     appendMessage('FORMA · ЛОКАЛЬНАЯ МОДЕЛЬ', result.vision ? 'Можно описать сцену или приложить картинку.' : 'Можно создавать сцены по тексту. Для картинки выбери файл mmproj в разделе своих файлов.');
   } catch (e) {
     finishProgress();
-    if (!getModelState().loaded) { ui['model-status'].textContent = 'Модель не загружена'; ui['load-model'].textContent = 'Загрузить ↗'; }
+    if (!getModelState().loaded && !getModelState().suspended) { ui['model-status'].textContent = 'Модель не загружена'; ui['load-model'].textContent = 'Загрузить ↗'; }
     else { updateModelStatus(); }
     error(e?.message || String(e));
-  } finally { setBusy(false); }
+  } finally {
+    if (activeScene?.parked) await restorePreviousScene();
+    setBusy(false);
+  }
 });
 ui['prompt-form'].addEventListener('submit', async event => {
   event.preventDefault();
   if (busy) return;
   const prompt = ui['prompt-input'].value.trim();
   if (!prompt) return;
-  if (!getModelState().loaded) { error('Сначала загрузи модель кнопкой выше.'); return; }
+  if (!getModelState().loaded && !getModelState().suspended) { error('Сначала загрузи модель кнопкой выше.'); return; }
   error(''); setBusy(true); appendMessage('ТЫ', prompt + (image ? ' · с референсом' : ''));
   trace.begin({preserve:true});
   trace.stage('Запрос пользователя', prompt);
@@ -462,6 +573,12 @@ ui['prompt-form'].addEventListener('submit', async event => {
   ui['stop-agent'].disabled = false;
   ui['stop-agent'].textContent = 'Остановить';
   try {
+    if (image && !getModelState().vision && getModelState().mode === 'local' && !ui['projector-file'].files?.[0]) {
+      throw new Error('Для картинки выбери файл mmproj в разделе «Свои файлы модели».');
+    }
+    await parkScene();
+    await activateModel(agentController.signal);
+    if (agentController.signal.aborted) throw new DOMException('Создание сцены остановлено.', 'AbortError');
     if (image && !getModelState().vision) {
       if (getModelState().mode === 'local') {
         const projector = ui['projector-file'].files?.[0];
@@ -499,6 +616,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
     if (!selected.frame) throw new Error('Проверенная сцена недоступна для предпросмотра.');
     adoptCandidate(selected.frame, result.html);
     session.frame = selected.frame;
+    session.parked = false;
     activeScene = session;
     selected.frame = null;
     const warning = (result.validation.warnings || []).join(' ');
@@ -510,7 +628,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
     status.textContent = e?.name === 'AbortError' ? 'Создание сцены остановлено.' : 'Не получилось создать и проверить сцену.';
     ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
     finishProgress();
-    if (!getModelState().loaded) {
+    if (!getModelState().loaded && !getModelState().suspended) {
       ui['model-status'].textContent = 'Модель не загружена';
       ui['load-model'].textContent = 'Загрузить ↗';
     } else {
@@ -520,7 +638,8 @@ ui['prompt-form'].addEventListener('submit', async event => {
     if (e?.name !== 'AbortError') trace.stage('Не удалось завершить', e?.message || String(e));
     trace.finish(e?.name === 'AbortError' ? 'Остановлено' : 'Ошибка', e?.name === 'AbortError' ? 'done' : 'error');
   } finally {
-    discardCandidate(selected.frame);
+    await discardCandidate(selected.frame);
+    if (activeScene?.parked) await restorePreviousScene();
     agentController = null;
     ui['stop-agent'].hidden = true;
     setBusy(false);
@@ -541,12 +660,15 @@ ui['image-input'].addEventListener('change', event => {
 });
 ui['remove-image'].addEventListener('click', clearImage);
 document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => { ui['prompt-input'].value = button.dataset.prompt; ui['prompt-input'].focus(); }));
-ui['reset-scene'].addEventListener('click', () => {
+ui['reset-scene'].addEventListener('click', async () => {
   if (busy) return;
-  disposeScene(ui['preview-frame']);
-  activeScene = null;
-  scene = ''; ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
-  ui['preview-status'].textContent = 'Твоя сцена появится здесь'; ui['download-html'].disabled = true; ui['copy-html'].disabled = true; error('');
+  setBusy(true);
+  try {
+    await releaseScene(ui['preview-frame']);
+    activeScene = null;
+    scene = ''; ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
+    ui['preview-status'].textContent = 'Твоя сцена появится здесь'; ui['download-html'].disabled = true; ui['copy-html'].disabled = true; error('');
+  } finally { setBusy(false); }
 });
 ui['download-html'].addEventListener('click', () => {
   if (!scene) return;

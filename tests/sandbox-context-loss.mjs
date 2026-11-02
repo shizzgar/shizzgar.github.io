@@ -33,11 +33,36 @@ async function run(errors) {
 const lost = await run([{kind:'webgl-context-lost', message:'Потерян контекст WebGL; устройство или браузер не смогли продолжить отрисовку.'}]);
 assert.equal(lost.ok, false);
 assert.equal(lost.retryable, false);
+assert.equal(lost.contextLost, true);
+assert.equal(lost.infrastructureErrorOther, false);
 assert.match(lost.errors.join(' '), /Потерян контекст WebGL/);
 assert.doesNotMatch(lost.errors.join(' '), /не создала|не обнаружен/);
 
 const missing = await run([]);
 assert.equal(missing.ok, false);
 assert.equal(missing.retryable, true);
+assert.equal(missing.contextLost, false);
+assert.equal(missing.infrastructureErrorOther, false);
 assert.match(missing.errors.join(' '), /Активный WebGL-контекст не обнаружен/);
+
+const mixed = await run([
+  {kind:'webgl-context-lost', message:'Потерян контекст WebGL'},
+  {kind:'resource', message:'Не удалось загрузить Three.js', source:'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js'},
+]);
+assert.equal(mixed.contextLost, true);
+assert.equal(mixed.infrastructureErrorOther, true);
+assert.equal(mixed.retryable, false);
+
+const missingLibrary = await run([{kind:'resource', message:'Не удалось загрузить Three.js', source:'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js'}]);
+assert.equal(missingLibrary.contextLost, false);
+assert.equal(missingLibrary.infrastructureErrorOther, true);
+assert.equal(missingLibrary.retryable, false);
+
+const saturated = await run([
+  ...Array.from({length:12}, (_,i) => ({kind:'console', message:`ошибка шейдера ${i}`})),
+  {kind:'webgl-context-lost', message:'Потерян контекст WebGL'},
+]);
+assert.equal(saturated.contextLost, true, 'a burst of earlier errors must not hide context loss');
+assert.equal(saturated.retryable, false);
+assert.equal(saturated.errors.length, 13, 'reports remain bounded with one reserved loss signal');
 console.log('PASS distinguishes lost WebGL context from no active context without changing retry policy');

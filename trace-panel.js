@@ -184,14 +184,16 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
     if (e.type === 'token' || e.type === 'reasoning') { addChunk(e); return; }
     const attempt = Number.isFinite(e.attempt) ? e.attempt : 0;
     const suffix = attempt ? ` · попытка ${attempt}${e.maxAttempts ? `/${e.maxAttempts}` : ''}` : '';
-    if (['generating', 'validating', 'validation_failed', 'repairing', 'success', 'failed'].includes(e.type)) flushStreams();
+    if (['generating', 'preflight', 'validating', 'validation_failed', 'context_loss_repair', 'repairing', 'success', 'failed'].includes(e.type)) flushStreams();
     switch (e.type) {
       case 'generating':
         // TTFT is per generation, including prefill; do not include validation.
         generationStarted = now(); measuredTtft = null; ttftBox.value.textContent = '—'; tpsBox.value.textContent = '—'; countBox.value.textContent = '—';
         tick(`Генерация${suffix}`); break;
+      case 'preflight': tick(`Предварительная проверка${suffix}`, 'Проверяю структуру документа и синтаксис обычных скриптов; для проверки отрисовки нужен запуск.'); break;
       case 'validating': tick(`Проверка запуска${suffix}`, 'Запускаю код и отслеживаю ошибки.'); break;
       case 'validation_failed': tick(`Ошибка проверки${suffix}`, Array.isArray(e.errors) ? e.errors.join('\n') : e.errors, 'error'); break;
+      case 'context_loss_repair': tick('Потерян WebGL-контекст', 'Причина неизвестна; попробую один раз исправить и запустить сцену заново.'); break;
       case 'repairing': tick('Исправление', 'Передаю найденные ошибки модели.'); break;
       case 'success': tick('Проверка пройдена', 'Ошибок выполнения за время проверки не обнаружено.', 'success'); break;
       case 'failed': tick(e.reason === 'output_limit' ? 'Достигнут предел генерации' : 'Остановлено с ошибкой', Array.isArray(e.errors) ? e.errors.join('\n') : e.errors, 'error'); badge.textContent = 'ОШИБКА'; badge.dataset.state = 'error'; break;

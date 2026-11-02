@@ -3,6 +3,10 @@
 // A synchronous infinite loop inside an iframe may still block the browser.
 const LIBRARY_URL = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js';
 const sessions = new WeakMap();
+const releaseSessions = new WeakMap();
+// Keep the last generation even after disposal: delayed cleanup from an older
+// session must never clear a newer document that has since been disposed.
+const latestSessions = new WeakMap();
 const MAX_ERRORS = 12;
 
 function createNonce() {
@@ -18,9 +22,13 @@ function bridge(nonce, settleMs, captureImage) {
   const nonce = ${JSON.stringify(nonce)};
   const send = (type, payload) => parent.postMessage({channel:'forma-runner-v1', nonce, type, payload}, '*');
   const errors = [];
+  let releasing = false;
   const report = (message, kind = 'script', source = '') => {
     try {
-      if (errors.length >= ${MAX_ERRORS}) return;
+      if (releasing) return;
+      // Keep the report bounded, but never let a burst of shader errors hide
+      // the first context-loss signal needed for resource recovery.
+      if (errors.length >= ${MAX_ERRORS} && (kind !== 'webgl-context-lost' || errors.some(item => item.kind === 'webgl-context-lost'))) return;
       const item = {message:String(message || 'Неизвестная ошибка').slice(0,900), kind, source:String(source || '').slice(0,500)};
       errors.push(item);
       send('error', item);
@@ -45,6 +53,25 @@ function bridge(nonce, settleMs, captureImage) {
     return originalConsoleError.apply(this, args);
   };
   const contexts = [];
+  // The parent asks the bridge to release the scene while the iframe is still
+  // alive. This is best effort: an acknowledgement confirms the request was
+  // processed, not that the driver has returned a particular amount of VRAM.
+  addEventListener('message', event => {
+    const data = event.data;
+    if (event.source !== parent || !data || data.channel !== 'forma-runner-v1' || data.nonce !== nonce || data.type !== 'release') return;
+    releasing = true;
+    let requested = 0, unsupported = 0, failed = 0;
+    for (const item of contexts) {
+      try {
+        if (typeof item.ctx.isContextLost === 'function' && item.ctx.isContextLost()) continue;
+        const ext = item.ctx.getExtension('WEBGL_lose_context');
+        if (!ext || typeof ext.loseContext !== 'function') { unsupported++; continue; }
+        ext.loseContext();
+        requested++;
+      } catch (_) { failed++; }
+    }
+    send('released', {contexts:contexts.length, requested, unsupported, failed});
+  });
   const getContext = HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.getContext = function(type, ...args) {
     const isWebGL = typeof type === 'string' && /^(webgl|experimental-webgl|webgl2)$/i.test(type);
@@ -130,6 +157,43 @@ export function disposeScene(iframe) {
   if (dispose) dispose();
 }
 
+/** Ask a live sandbox to release WebGL before its iframe is removed.
+ * Acknowledgement is not confirmation of GPU memory reclamation. */
+export async function releaseScene(iframe, {timeoutMs = 1000} = {}) {
+  const session = iframe && releaseSessions.get(iframe);
+  if (!session) {
+    if (iframe) disposeScene(iframe);
+    return {acknowledged:false};
+  }
+  const timeout = Math.max(100, Math.min(5000, Math.floor(timeoutMs) || 1000));
+  const result = await new Promise(resolve => {
+    let done = false;
+    let timer;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      window.removeEventListener('message', onMessage);
+      resolve(value);
+    };
+    const onMessage = event => {
+      const data = event.data;
+      if (event.source !== session.target || !data || data.channel !== 'forma-runner-v1' || data.nonce !== session.nonce || data.type !== 'released') return;
+      const p = data.payload;
+      const isCount = value => Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
+      if (!p || ![p.contexts, p.requested, p.unsupported, p.failed].every(isCount)) return;
+      finish({acknowledged:true, contexts:p.contexts, requested:p.requested, unsupported:p.unsupported, failed:p.failed});
+    };
+    window.addEventListener('message', onMessage);
+    timer = setTimeout(() => finish({acknowledged:false}), timeout);
+    try { session.target.postMessage({channel:'forma-runner-v1', nonce:session.nonce, type:'release'}, '*'); }
+    catch (_) { finish({acknowledged:false}); }
+  });
+  // A later validateScene call may already have installed a new session.
+  if (releaseSessions.get(iframe) === session) disposeScene(iframe);
+  return result;
+}
+
 /**
  * Execute a scene in an iframe already attached to the DOM. For meaningful
  * canvas-size checks the frame needs dimensions and must not be display:none.
@@ -151,6 +215,7 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
     let ended = false;
     let disposed = false;
     let timer;
+    const releaseSession = {nonce, target:iframe.contentWindow};
     const cleanup = () => {
       if (disposed) return;
       disposed = true;
@@ -158,28 +223,41 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
       window.removeEventListener('message', onMessage);
       signal?.removeEventListener('abort', onAbort);
       if (sessions.get(iframe) === dispose) sessions.delete(iframe);
+      if (releaseSessions.get(iframe) === releaseSession) releaseSessions.delete(iframe);
+    };
+    const releaseCandidate = callback => {
+      // Don't release or clear a newer validation using the same iframe.
+      let release;
+      try { release = releaseSessions.get(iframe) === releaseSession ? releaseScene(iframe) : null; }
+      catch (_) { if (releaseSessions.get(iframe) === releaseSession) cleanup(); }
+      Promise.resolve(release).catch(() => { if (releaseSessions.get(iframe) === releaseSession) cleanup(); }).then(() => {
+        if (latestSessions.get(iframe) === releaseSession) iframe.srcdoc = '';
+        callback();
+      });
     };
     const finish = result => {
       if (ended) return;
       ended = true;
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
-      if (!result.ok) { cleanup(); iframe.srcdoc = ''; }
-      resolve(result);
+      if (result.ok) { resolve(result); return; }
+      // Failed candidates can still own live WebGL resources.
+      releaseCandidate(() => resolve(result));
     };
     const onAbort = () => {
       if (ended) { cleanup(); return; }
       ended = true;
-      cleanup();
-      iframe.srcdoc = '';
-      reject(new DOMException('Проверка отменена.', 'AbortError'));
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      releaseCandidate(() => reject(new DOMException('Проверка отменена.', 'AbortError')));
     };
     const dispose = () => {
       if (!ended) onAbort();
       else cleanup();
     };
     const appendError = item => {
-      if (!item || typeof item.message !== 'string' || observed.length >= MAX_ERRORS) return;
+      if (!item || typeof item.message !== 'string') return;
+      if (observed.length >= MAX_ERRORS && (item.kind !== 'webgl-context-lost' || observed.some(value => value.kind === 'webgl-context-lost'))) return;
       const value = {
         message: item.message.slice(0,900),
         kind: typeof item.kind === 'string' ? item.kind.slice(0,40) : 'script',
@@ -213,10 +291,13 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
       }
       const screenshot = captureImage && typeof p.screenshot === 'string' && p.screenshot.startsWith('data:image/jpeg;base64,') && p.screenshot.length <= 1000000 ? p.screenshot : null;
       if (captureImage && !screenshot) warnings.push('Не удалось получить изображение сцены для визуальной проверки.');
-      const infrastructureError = observed.some(item => item.source.startsWith(LIBRARY_URL) || item.kind === 'webgl-context-lost') || observed.some(item => /error creating webgl context|webgl is not supported/i.test(item.message));
-      finish({ok:errors.length === 0, errors, warnings, retryable:!infrastructureError, evidence, screenshot});
+      const contextLost = observed.some(item => item.kind === 'webgl-context-lost');
+      const infrastructureErrorOther = observed.some(item => item.source.startsWith(LIBRARY_URL)) || observed.some(item => /error creating webgl context|webgl is not supported/i.test(item.message));
+      finish({ok:errors.length === 0, errors, warnings, retryable:!(contextLost || infrastructureErrorOther), contextLost, infrastructureErrorOther, evidence, screenshot});
     };
     sessions.set(iframe, dispose);
+    releaseSessions.set(iframe, releaseSession);
+    latestSessions.set(iframe, releaseSession);
     window.addEventListener('message', onMessage);
     signal?.addEventListener('abort', onAbort, {once:true});
     timer = setTimeout(() => finish({ok:false, errors:['Сцена не завершила запуск за отведённое время. Проверь доступность Three.js и работу браузера.'], warnings:[], retryable:false, evidence:null}), timeout);

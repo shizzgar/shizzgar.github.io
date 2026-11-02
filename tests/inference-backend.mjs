@@ -5,7 +5,10 @@ const source = await readFile(new URL('../inference.js', import.meta.url),'utf8'
 const loggerSource = await readFile(new URL('../gpu-engine-log.js', import.meta.url),'utf8');
 const events=[]; const instances=[];
 let failNext=false;
+let failExit=false;
+let rejectImageModality=false;
 let failureQueue=[];
+let loadGate=null, onLoad=null;
 let lastCompletion;
 const navigator={hardwareConcurrency:4};
 const context=vm.createContext({navigator,isSecureContext:true,crossOriginIsolated:false,console,Blob,URL,ArrayBuffer,Uint8Array,DOMException,AbortController,Promise,Math,setTimeout,clearTimeout});
@@ -13,9 +16,9 @@ async function synth(exports) {const m=new vm.SyntheticModule(Object.keys(export
 class Wllama {
   constructor(){instances.push(this);events.push('make');}
   setCompat(){}
-  async loadModel(files,options){events.push('load');this.options={...options};this.files=files;if(failNext){failNext=false;throw Error('initialization failed')}if(failureQueue.length){const next=failureQueue.shift();if(next)throw next}}
-  async exit(){events.push('exit')}
-  supportInputModality(){return this.files.length>1}
+  async loadModel(files,options){events.push('load');this.options={...options};this.files=files;if(onLoad)onLoad();if(loadGate)await loadGate;if(failNext){failNext=false;throw Error('initialization failed')}if(failureQueue.length){const next=failureQueue.shift();if(next)throw next}}
+  async exit(){events.push('exit');if(failExit){failExit=false;throw Error('worker exit failed')}}
+  supportInputModality(){return !rejectImageModality&&this.files.length>1}
   getLoadedContextInfo(){return {n_ctx:this.options.n_ctx,n_ctx_train:32768,n_batch:2048,n_ubatch:512}}
   getNumThreads(){return 1}
   async createChatCompletion(options){lastCompletion=options;return (async function*(){yield {choices:[{delta:{content:'ok'},finish_reason:'stop'}]};yield {choices:[],usage:{prompt_tokens:20,completion_tokens:2,total_tokens:22}}})()}
@@ -80,6 +83,24 @@ navigator.gpu={requestAdapter:async()=>null};
 await api.loadLocalModel(shard,null);await api.setLocalProjector(projector);failureQueue=[Error('unsupported architecture')];
 await assert.rejects(api.ensureVision(),/unsupported architecture/i);
 assert.equal(api.getModelState().loaded,false);assert.equal(api.getModelState().backend,null);
+assert.equal(api.getModelState().suspended,true,'text files remain recoverable after vision load fails');
+assert.equal(api.getModelState().vision,false,'failed vision load does not claim projector is active');
+await api.resumeModel();assert.equal(api.getModelState().loaded,true);
+assert.equal(instances.at(-1).files[0],shard[0],'restore uses original text shards');
+assert.equal(instances.at(-1).files.length,1,'restore does not use failed projector configuration');
+await api.ensureVision();assert.equal(api.getModelState().vision,true,'selected local projector survives failed vision attempt');
+await api.unloadModel();
+// A rejected text worker shutdown must remain available for a retry before a
+// new worker starts, just as in explicit suspension.
+await api.loadLocalModel(shard,null);await api.setLocalProjector(projector);failExit=true;
+await assert.rejects(api.ensureVision(),/worker exit failed/);
+assert.equal(api.getModelState().suspended,true);assert.equal(api.getModelState().loaded,false);
+assert.equal(api.getModelState().retiring,true);
+const exitsBeforeVisionRecovery=events.filter(x=>x==='exit').length;
+await api.resumeModel();assert.equal(events.filter(x=>x==='exit').length,exitsBeforeVisionRecovery+1);
+assert.equal(api.getModelState().retiring,false);
+assert.equal(instances.at(-1).files[0],shard[0]);assert.equal(api.getModelState().vision,false);
+await api.ensureVision();assert.equal(api.getModelState().vision,true);await api.unloadModel();
 await api.loadLocalModel(shard,null);const baseline=api.getLoadedContextInfo();failNext=true;
 await assert.rejects(api.prepareBenchmark({n_batch:256,n_ubatch:128}),/initialization/);
 assert.equal(api.getModelState().backend,null);
@@ -141,4 +162,79 @@ failureQueue=[];await api.loadLocalModel(shard,null);await api.setLocalProjector
 failureQueue=[...Array.from({length:6},()=>Error('vision GPU failed')),null];await api.ensureVision();
 assert.equal(api.getModelState().backend,'cpu');assert.equal(api.getModelState().vision,true);
 assert.equal(instances.at(-1).options.n_gpu_layers,0);await api.unloadModel();
+// Suspension frees the worker, preserves local files/vision/config, and is
+// idempotent. A failed or cancelled restoration can be attempted again.
+failureQueue=[];navigator.gpu={requestAdapter:async()=>({})};
+await api.loadLocalModel(shard,projector);
+const retained=instances.at(-1).files, selectedCtx=instances.at(-1).options.n_ctx;
+const exitCount=events.filter(x=>x==='exit').length;
+await api.suspendModel();await api.suspendModel();
+assert.equal(events.filter(x=>x==='exit').length,exitCount+1);
+assert.equal(api.getModelState().loaded,false);assert.equal(api.getModelState().suspended,true);
+const downloadCount=events.filter(x=>x==='download').length;
+failureQueue=[Error('unsupported architecture')];
+await assert.rejects(api.resumeModel(),/unsupported architecture/);
+assert.equal(api.getModelState().suspended,true);assert.equal(api.getModelState().loaded,false);
+await api.resumeModel();
+assert.equal(api.getModelState().suspended,false);assert.equal(api.getModelState().vision,true);
+assert.equal(instances.at(-1).files[0],retained[0]);assert.equal(instances.at(-1).files[1],retained[1]);
+assert.equal(instances.at(-1).options.n_ctx,selectedCtx);assert.equal(events.filter(x=>x==='download').length,downloadCount);
+await api.suspendModel();
+const cancelled=new AbortController();cancelled.abort();
+await assert.rejects(api.resumeModel({signal:cancelled.signal}),{name:'AbortError'});
+assert.equal(api.getModelState().suspended,true);
+let releaseLoad, loadStarted;
+loadGate=new Promise(resolve=>{releaseLoad=resolve});
+const entered=new Promise(resolve=>{loadStarted=resolve});onLoad=loadStarted;
+const pendingController=new AbortController();
+const resumePending=api.resumeModel({signal:pendingController.signal});
+await entered;pendingController.abort();releaseLoad();
+await assert.rejects(resumePending,{name:'AbortError'});
+loadGate=null;onLoad=null;
+assert.equal(api.getModelState().suspended,true);assert.equal(api.getModelState().loaded,false);
+await api.resumeModel();await api.unloadModel();assert.equal(api.getModelState().suspended,false);
+// A local replacement may fail while suspended without destroying the old
+// inputs; recovery still restores the original model.
+await api.loadLocalModel(shard,null);await api.suspendModel();
+failureQueue=[Error('invalid GGUF')];
+await assert.rejects(api.loadLocalModel([new Blob(['replacement'])],null),/invalid GGUF/);
+assert.equal(api.getModelState().suspended,true);
+await api.resumeModel();assert.equal(instances.at(-1).files[0],shard[0]);await api.unloadModel();
+// Replacing a live model retains the previous configuration both when the
+// old worker cannot exit and when the new projector is not recognized.
+await api.loadLocalModel(shard,projector);failExit=true;
+const replacement=[new Blob(['replacement'])];
+await assert.rejects(api.loadLocalModel(replacement,projector),/worker exit failed/);
+assert.equal(api.getModelState().suspended,true);assert.equal(api.getModelState().retiring,true);
+await api.resumeModel();assert.equal(api.getModelState().retiring,false);
+assert.equal(instances.at(-1).files[0],shard[0]);assert.equal(api.getModelState().vision,true);
+rejectImageModality=true;
+await assert.rejects(api.loadLocalModel(replacement,projector),/не распознал компонент/);
+assert.equal(api.getModelState().suspended,true);assert.equal(api.getModelState().retiring,false);
+assert.equal(api.getModelState().vision,true,'the old model retains vision availability');
+rejectImageModality=false;await api.resumeModel();
+assert.equal(instances.at(-1).files[0],shard[0]);assert.equal(instances.at(-1).files[1],projector);
+assert.equal(api.getModelState().vision,true);await api.unloadModel();
+// Probe again on resume: GPU may become usable after a CPU-only launch.
+navigator.gpu={requestAdapter:async()=>null};await api.loadLocalModel(shard,null);await api.suspendModel();
+navigator.gpu={requestAdapter:async()=>({})};await api.resumeModel();
+assert.equal(instances.at(-1).options.n_gpu_layers,99999);await api.unloadModel();
+// A rejected worker shutdown must not silently start another worker while the
+// old one might still hold GPU resources. Resume retries the cleanup first.
+await api.loadLocalModel(shard,null);failExit=true;
+await assert.rejects(api.suspendModel(),/worker exit failed/);
+assert.equal(api.getModelState().suspended,true);
+assert.equal(api.getModelState().retiring,true);
+await assert.rejects(api.loadLocalModel(shard,null),/остановить предыдущий движок/);
+const exitsBeforeRetry=events.filter(x=>x==='exit').length;
+await api.resumeModel();assert.equal(events.filter(x=>x==='exit').length,exitsBeforeRetry+1);
+assert.equal(api.getModelState().retiring,false);
+await api.unloadModel();
+// Remote restoration likewise reuses the same downloaded file-backed blob.
+await api.loadModel({modelUrl:'https://example.test/model.gguf'});
+const remoteFile=instances.at(-1).files[0], downloadsBeforeRestore=events.filter(x=>x==='download').length;
+await api.suspendModel();await api.resumeModel();
+assert.equal(instances.at(-1).files[0],remoteFile);
+assert.equal(events.filter(x=>x==='download').length,downloadsBeforeRestore);
+await api.unloadModel();
 console.log('PASS adapter availability, secure context, pre-download probe, CPU/GPU mode, vision and worker reinitialization');

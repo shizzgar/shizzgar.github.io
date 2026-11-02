@@ -3,9 +3,9 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 const source = await readFile('./profiling-ui.js','utf8');
 const ctx = vm.createContext({DOMException});
-let info = null, backend = null;
+let info = null, backend = null, suspended = false, retiring = false;
 const benchmark = new vm.SyntheticModule(['profileDevice'],function(){this.setExport('profileDevice',async()=>({adapterAvailable:false,webglAvailable:false,wasmThreadsAvailable:false}));},{context:ctx});
-const inference = new vm.SyntheticModule(['getLoadedContextInfo','getModelState'],function(){this.setExport('getLoadedContextInfo',()=>info);this.setExport('getModelState',()=>({loaded:!!info,backend}));},{context:ctx});
+const inference = new vm.SyntheticModule(['getLoadedContextInfo','getModelState'],function(){this.setExport('getLoadedContextInfo',()=>info);this.setExport('getModelState',()=>({loaded:!!info,backend,suspended,retiring}));},{context:ctx});
 const module = new vm.SourceTextModule(source,{context:ctx});await module.link(spec=>spec==='./benchmark.js'?benchmark:inference);await module.evaluate();
 let state,stages=[];const profiler=module.namespace.createProfiler({setDevice:value=>state=value,stage:(...args)=>stages.push(args)});
 await profiler.run();assert.match(state.backend,/автоматически/);assert.equal(state.outputLimit,'Модель ещё не загружена');assert.equal(stages.length,0);
@@ -25,4 +25,6 @@ await profiler.run();assert.match(state.backend,/Движок разместил
 info={n_ctx:8192,model_buffers:[{backend:'CPU_Mapped',mib:100}]};await profiler.run();assert.match(state.backend,/GPU-буферы в журнале не обнаружены/);
 info={n_ctx:8192,model_buffers:[{backend:'CPU',mib:200},{backend:'WebGPU',mib:2200}]};await profiler.run();assert.doesNotMatch(state.backend,/GPU-буферы в журнале не обнаружены/);
 info={n_ctx:8192,model_buffers:[{backend:'CPU',mib:0}]};await profiler.run();assert.doesNotMatch(state.backend,/Движок разместил веса в CPU-буфере/);
+info=null;suspended=true;await profiler.run();assert.match(state.backend,/временно выгружена/);assert.match(state.engineWebgpu,/остановлен/);assert.match(state.modelBuffers,/актуальные данные отсутствуют/);assert.match(state.outputLimit,/временно выгружена/);
+retiring=true;await profiler.run();assert.match(state.backend,/не завершена/);assert.match(state.engineWebgpu,/не завершена/);assert.match(state.modelBuffers,/не подтверждено/);
 console.log('PASS truthful CPU buffer evidence without claiming complete logs');

@@ -15,6 +15,12 @@ const CONTEXT_ATTEMPTS = [262144, 131072, 65536, 32768, 16384, 8192];
 let engine = null;
 let loading = false;
 let running = false;
+// A suspended model has no live worker but retains its original file-backed
+// inputs and configuration for a reload in this tab.
+let suspended = false;
+// If worker shutdown rejects, keep its handle so restoration/replacement can
+// retry cleanup instead of silently starting a second worker alongside it.
+let retiringEngine = null;
 let visionAvailable = false;
 let activeModelUrl = '';
 let activeModelSizes = {};
@@ -108,7 +114,7 @@ async function makeEngine() {
 // A preflight adapter and the adapter subsequently selected in the worker can
 // differ or disappear. Only retry initialization itself; downloads and file
 // validation are never repeated, and errors are not classified as GPU OOM.
-async function initializeWithCpuFallback(instance, files, gpuLayers, config, onStatus) {
+async function initializeWithCpuFallback(instance, files, gpuLayers, config, onStatus, signal = null) {
   const ceiling = Number.isSafeInteger(config.n_ctx) && config.n_ctx > 0 ? config.n_ctx : CONTEXT_ATTEMPTS[0];
   const contexts = [...new Set([ceiling, ...CONTEXT_ATTEMPTS.filter(n => n < ceiling)])];
   const backends = gpuLayers === 0 ? [0] : [gpuLayers, 0];
@@ -116,15 +122,24 @@ async function initializeWithCpuFallback(instance, files, gpuLayers, config, onS
   let current = instance;
   for (const backend of backends) {
     for (const nCtx of contexts) {
+      if (signal?.aborted) {
+        if (current) await current.exit().catch(() => {});
+        throw new DOMException('Загрузка модели отменена.', 'AbortError');
+      }
       if (!current) current = await makeEngine();
       const label = backend === 0 ? 'CPU' : 'GPU запрошен';
       onStatus(`Инициализация: ${label}, контекст ${nCtx.toLocaleString('ru-RU')} токенов…`);
       try {
+        if (signal?.aborted) throw new DOMException('Загрузка модели отменена.', 'AbortError');
         await current.loadModel(files, loadOptions({...config, n_ctx:nCtx, n_gpu_layers:backend}));
+        // Wllama cannot cancel an in-flight load; dispose the just-created
+        // worker rather than leaving a cancelled model occupying the GPU.
+        if (signal?.aborted) throw new DOMException('Загрузка модели отменена.', 'AbortError');
         return {instance:current, gpuLayers:backend, fallbackReason: backend === 0 && gpuLayers !== 0 ? 'gpu-init-failed' : null, nCtx};
       } catch (error) {
         await current.exit().catch(() => {});
         current = null;
+        if (signal?.aborted) throw new DOMException('Загрузка модели отменена.', 'AbortError');
         if (error?.name === 'AbortError') throw error;
         const message = String(error?.message || error || 'неизвестная ошибка').slice(0, 500);
         failures.push(`${label}, ${nCtx}: ${message}`);
@@ -177,6 +192,7 @@ async function findModelUrl(token = '') {
  */
 export async function loadModel({ onProgress = () => {}, onStatus = () => {}, modelUrl = '', projectorUrl = PROJECTOR_URL, token = '' } = {}) {
   if (loading || running) throw new Error('Модель уже занята.');
+  if (retiringEngine) throw new Error('Не удалось остановить предыдущий движок. Повтори выгрузку модели.');
   if (engine) return { vision: visionAvailable, backend:activeGpuLayers === 0 ? 'cpu' : 'gpu-requested' };
   loading = true;
   let instance;
@@ -198,6 +214,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
     ({instance, gpuLayers, fallbackReason, nCtx} = await initializeWithCpuFallback(instance, shards, gpuLayers, {}, onStatus));
     visionAvailable = false;
     engine = instance;
+    suspended = false;
     activeModelUrl = resolvedModelUrl;
     activeModelSizes = modelSource.sizes;
     activeRemoteShards = shards;
@@ -223,6 +240,7 @@ export async function loadModel({ onProgress = () => {}, onStatus = () => {}, mo
 /** Load explicitly selected GGUF files; these File objects last only for the tab session. */
 export async function loadLocalModel(modelFiles, projectorFile = null, { onStatus = () => {} } = {}) {
   if (loading || running) throw new Error('Модель уже занята.');
+  if (retiringEngine) throw new Error('Не удалось остановить предыдущий движок. Повтори выгрузку модели.');
   loading = true;
   let instance = null;
   try {
@@ -239,7 +257,12 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
       const old = engine;
       engine = null;
       visionAvailable = false;
+      // Keep the previous file-backed configuration recoverable until the
+      // replacement has initialized. A failed exit retains the worker handle.
+      suspended = true;
+      retiringEngine = old;
       await old.exit();
+      retiringEngine = null;
     }
     onStatus('Инициализируем локальную модель…');
     ({instance, gpuLayers, fallbackReason, nCtx} = await initializeWithCpuFallback(instance, files, gpuLayers, {}, onStatus));
@@ -247,6 +270,7 @@ export async function loadLocalModel(modelFiles, projectorFile = null, { onStatu
     if (projector && !hasVision) throw new Error('Движок не распознал компонент для картинок.');
     engine = instance;
     instance = null;
+    suspended = false;
     activeMode = 'local';
     activeModelUrl = '';
     activeRemoteShards = [];
@@ -292,7 +316,12 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {},
     onStatus('Перезапускаем модель для картинок…');
     engine = null;
     visionAvailable = false;
+    // Until the vision worker is fully initialized, the previous text files
+    // remain the recoverable configuration. Keep a handle if shutdown fails.
+    suspended = true;
+    retiringEngine = old;
     await old.exit();
+    retiringEngine = null;
     old = null;
     next = await makeEngine();
     let gpuLayers = activeGpuLayers ?? 99999;
@@ -308,11 +337,12 @@ export async function ensureVision({ onProgress = () => {}, onStatus = () => {},
     visionAvailable = true;
     activeModelBlobs = [...shards, projector];
     activeBlobsHaveVision = true;
+    suspended = false;
     onStatus('Модель готова для текста и картинок');
   } catch (err) {
     if (next) await next.exit().catch(() => {});
     if (err?.name === 'AbortError') throw err;
-    const recovery = engine ? 'Текстовая модель осталась доступна; можно повторить попытку с картинкой.' : (activeMode === 'local' ? 'Нажми «Загрузить свои файлы» ещё раз, чтобы восстановить модель.' : 'Нажми «Загрузить» ещё раз, чтобы восстановить текстовый режим.');
+    const recovery = engine ? 'Текстовая модель осталась доступна; можно повторить попытку с картинкой.' : (suspended ? 'Исходные файлы сохранены в этой вкладке: текстовую модель можно восстановить без повторного скачивания.' : (activeMode === 'local' ? 'Нажми «Загрузить свои файлы» ещё раз, чтобы восстановить модель.' : 'Нажми «Загрузить» ещё раз, чтобы восстановить текстовый режим.'));
     throw new Error(`Не удалось включить картинки: ${err?.message || err}. ${recovery}`);
   } finally {
     loading = false;
@@ -450,7 +480,7 @@ export async function inspectScene({ prompt, frame, reference = null, signal } =
 }
 
 export function getModelState() {
-  return { loaded: Boolean(engine), loading, running, vision: visionAvailable, mode: activeMode, backend:engine ? (activeGpuLayers === 0 ? 'cpu' : 'gpu-requested') : null, fallbackReason:engine ? activeFallbackReason : null };
+  return { loaded: Boolean(engine), suspended, retiring: Boolean(retiringEngine), loading, running, vision: suspended ? activeBlobsHaveVision : visionAvailable, mode: activeMode, backend:engine ? (activeGpuLayers === 0 ? 'cpu' : 'gpu-requested') : null, fallbackReason:engine ? activeFallbackReason : null };
 }
 
 /** Only expose capability numbers, never full model metadata or prompts. */
@@ -586,10 +616,73 @@ export async function runBenchmark(config, { signal, maxTokens = 64, onChunk = (
   } finally { running = false; }
 }
 
+/** Release the model worker while retaining the file inputs for this tab. */
+export async function suspendModel() {
+  if (loading || running) throw new Error('Дождитесь завершения текущей операции.');
+  if (!engine && !retiringEngine) return { suspended };
+  if (!activeModelBlobs.length) throw new Error('Файлы модели недоступны для восстановления.');
+  loading = true;
+  const old = retiringEngine || engine;
+  engine = null;
+  retiringEngine = old;
+  visionAvailable = false;
+  suspended = true;
+  try {
+    // Exit destroys the worker, although the browser/driver decides when GPU
+    // allocations are physically reclaimed. Do not claim VRAM was freed.
+    await old.exit();
+    retiringEngine = null;
+    return { suspended:true };
+  } finally { loading = false; }
+}
+
+/** Restore a suspended worker from the exact retained blobs, without network. */
+export async function resumeModel({ onStatus = () => {}, signal } = {}) {
+  if (loading || running) throw new Error('Модель уже занята.');
+  if (engine) return { vision:visionAvailable, backend:activeGpuLayers === 0 ? 'cpu' : 'gpu-requested' };
+  if (!suspended || !activeModelBlobs.length) throw new Error('Нет сохранённой модели для восстановления.');
+  if (signal?.aborted) throw new DOMException('Загрузка модели отменена.', 'AbortError');
+  loading = true;
+  let next = null;
+  try {
+    if (retiringEngine) {
+      onStatus('Завершаем предыдущий движок…');
+      await retiringEngine.exit();
+      retiringEngine = null;
+    }
+    if (signal?.aborted) throw new DOMException('Загрузка модели отменена.', 'AbortError');
+    onStatus('Восстанавливаем модель из уже загруженных файлов…');
+    // A previous CPU fallback may have happened while the scene occupied GPU
+    // resources. Probe again after it is released and prefer GPU when found.
+    const requestedGpuLayers = await chooseGpuLayers(onStatus);
+    if (signal?.aborted) throw new DOMException('Загрузка модели отменена.', 'AbortError');
+    const first = await makeEngine();
+    let gpuLayers, fallbackReason, nCtx;
+    ({instance:next, gpuLayers, fallbackReason, nCtx} = await initializeWithCpuFallback(first, activeModelBlobs, requestedGpuLayers, activeConfig, onStatus, signal));
+    if (signal?.aborted) throw new DOMException('Загрузка модели отменена.', 'AbortError');
+    if (activeBlobsHaveVision && !next.supportInputModality('image')) throw new Error('Не удалось восстановить поддержку изображений.');
+    engine = next;
+    next = null;
+    activeGpuLayers = gpuLayers;
+    activeFallbackReason = gpuLayers === 0 ? (fallbackReason || (requestedGpuLayers === 0 ? 'adapter-unavailable' : null)) : null;
+    rememberLoadedConfig(engine, {...activeConfig, n_ctx:nCtx, n_gpu_layers:gpuLayers}, false);
+    visionAvailable = activeBlobsHaveVision;
+    suspended = false;
+    onStatus(gpuLayers === 0 ? 'Модель восстановлена на CPU' : 'Модель восстановлена; запрошен GPU');
+    return { vision:visionAvailable, backend:gpuLayers === 0 ? 'cpu' : 'gpu-requested' };
+  } finally {
+    if (next) await next.exit().catch(() => {});
+    loading = false;
+  }
+}
+
 export async function unloadModel() {
   if (loading || running) throw new Error('Дождитесь завершения текущей операции.');
   const old = engine;
+  const retiring = retiringEngine;
   engine = null;
+  retiringEngine = null;
+  suspended = false;
   visionAvailable = false;
   localShards = [];
   localProjector = null;
@@ -601,4 +694,5 @@ export async function unloadModel() {
   activeGpuLayers = null;
   activeFallbackReason = null;
   if (old) await old.exit();
+  if (retiring && retiring !== old) await retiring.exit();
 }
