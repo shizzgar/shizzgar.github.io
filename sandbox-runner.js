@@ -292,7 +292,10 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
       const screenshot = captureImage && typeof p.screenshot === 'string' && p.screenshot.startsWith('data:image/jpeg;base64,') && p.screenshot.length <= 1000000 ? p.screenshot : null;
       if (captureImage && !screenshot) warnings.push('Не удалось получить изображение сцены для визуальной проверки.');
       const contextLost = observed.some(item => item.kind === 'webgl-context-lost');
-      const infrastructureErrorOther = observed.some(item => item.source.startsWith(LIBRARY_URL)) || observed.some(item => /error creating webgl context|webgl is not supported/i.test(item.message));
+      // A runtime exception inside Three.js also names the CDN file as its
+      // source; that does not mean that loading the library failed. Keep
+      // shader / material runtime failures eligible for the repair loop.
+      const infrastructureErrorOther = observed.some(item => item.kind === 'resource' && item.source.startsWith(LIBRARY_URL)) || observed.some(item => /error creating webgl context|webgl is not supported/i.test(item.message));
       finish({ok:errors.length === 0, errors, warnings, retryable:!(contextLost || infrastructureErrorOther), contextLost, infrastructureErrorOther, evidence, screenshot});
     };
     sessions.set(iframe, dispose);

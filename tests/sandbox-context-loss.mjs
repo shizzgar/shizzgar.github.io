@@ -9,7 +9,7 @@ globalThis.window = {
   removeEventListener(type, fn) { if (type === 'message') listeners.delete(fn); },
 };
 
-async function run(errors) {
+async function run(errors, evidence = {canvasCount:1, visibleCanvasCount:1, webglContexts:0, drawCalls:0, drawObservationAvailable:false}) {
   const frame = {
     isConnected: true,
     contentWindow: {},
@@ -23,7 +23,7 @@ async function run(errors) {
       };
       queueMicrotask(() => {
         for (const error of errors) send('error', error);
-        send('ready', {canvasCount:1, visibleCanvasCount:1, webglContexts:0, drawCalls:0, drawObservationAvailable:false});
+        send('ready', evidence);
       });
     },
   };
@@ -57,6 +57,31 @@ const missingLibrary = await run([{kind:'resource', message:'Не удалось
 assert.equal(missingLibrary.contextLost, false);
 assert.equal(missingLibrary.infrastructureErrorOther, true);
 assert.equal(missingLibrary.retryable, false);
+
+// Three.js can load successfully and later throw in its own source file due
+// to a generated shader or missing material uniforms. The CDN filename is a
+// stack location, not evidence of a failed network fetch.
+const libraryUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js';
+const shaderError = 'THREE.WebGLProgram: Shader Error: FRAGMENT varying vFogDepth does not match any VERTEX varying';
+const uniformError = "Uncaught TypeError: Cannot read properties of undefined (reading 'value') at refreshFogUniforms";
+const runtimeInLibrary = await run([
+  {kind:'console', message:shaderError},
+  {kind:'script', message:uniformError, source:libraryUrl},
+], {canvasCount:1, visibleCanvasCount:1, webglContexts:1, drawCalls:1, drawObservationAvailable:true});
+assert.equal(runtimeInLibrary.ok, false);
+assert.equal(runtimeInLibrary.infrastructureErrorOther, false);
+assert.equal(runtimeInLibrary.retryable, true);
+assert.ok(runtimeInLibrary.errors.includes(shaderError));
+assert.ok(runtimeInLibrary.errors.includes(uniformError));
+
+const lostWithLibraryRuntime = await run([
+  {kind:'console', message:shaderError},
+  {kind:'script', message:uniformError, source:libraryUrl},
+  {kind:'webgl-context-lost', message:'Потерян контекст WebGL'},
+]);
+assert.equal(lostWithLibraryRuntime.contextLost, true);
+assert.equal(lostWithLibraryRuntime.infrastructureErrorOther, false);
+assert.equal(lostWithLibraryRuntime.retryable, false, 'context loss still requires the bounded recovery path');
 
 const saturated = await run([
   ...Array.from({length:12}, (_,i) => ({kind:'console', message:`ошибка шейдера ${i}`})),
