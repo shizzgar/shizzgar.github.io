@@ -1,5 +1,5 @@
-import { profileDevice } from './benchmark.js?v=20261103-scaffold-2';
-import * as inference from './inference.js?v=20261103-scaffold-2';
+import { profileDevice } from './benchmark.js?v=20261103-workspace-3';
+import * as inference from './inference.js?v=20261103-workspace-3';
 
 // Profile available device capabilities without running a synthetic benchmark
 // or reinitializing the model. Measurements come from ordinary generation.

@@ -1,6 +1,6 @@
-import { prepareLocalModel, validateProjectorFile } from './local-model.js?v=20261103-scaffold-2';
-import { downloadFiles, modelShardUrls } from './progress-download.js?v=20261103-scaffold-2';
-import { createOffloadLogCollector } from './gpu-engine-log.js?v=20261103-scaffold-2';
+import { prepareLocalModel, validateProjectorFile } from './local-model.js?v=20261103-workspace-3';
+import { downloadFiles, modelShardUrls } from './progress-download.js?v=20261103-workspace-3';
+import { createOffloadLogCollector } from './gpu-engine-log.js?v=20261103-workspace-3';
 // Browser-local GGUF inference, using Wllama's OpenAI-compatible v3 API.
 // Inference never leaves the device; runtime and weights are downloaded on load.
 const WLLAMA_VERSION = '3.8.1';

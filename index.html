@@ -1,124 +1,75 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-app-version="20261103-workspace-3">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#10110f">
-  <meta name="description" content="Создавайте и меняйте 3D-сцены прямо в браузере.">
-  <title>Forma — локальная 3D-студия</title>
+  <meta name="theme-color" content="#0c1016">
+  <meta name="description" content="Создавайте и меняйте 3D-сцены прямо в браузере." data-i18n-content="ui.page.description">
+  <title data-i18n="ui.page.title">Forma — локальная 3D-студия</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20261103-scaffold-2">
-  <link rel="stylesheet" href="./trace-panel.css?v=20261103-scaffold-2">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20261103-workspace-3">
+  <link rel="stylesheet" href="./trace-panel.css?v=20261103-workspace-3">
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <a class="brand" href="./" aria-label="Forma — на главную"><span class="brand-mark" aria-hidden="true"><span></span></span><span>forma<span class="brand-dot">.</span></span></a>
-      <div class="topbar-center"><span class="topbar-label">3D-СТУДИЯ</span><span class="topbar-divider"></span><span>Создание сцен в браузере</span></div>
-      <div class="topbar-right"><span class="local-pill"><span></span> ЛОКАЛЬНО В БРАУЗЕРЕ</span><a class="about-link" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder" target="_blank" rel="noopener noreferrer">О модели <span aria-hidden="true">↗</span></a></div>
-    </header>
-
-    <main class="workspace">
-      <section class="conversation panel" aria-label="Чат со студией">
-        <div class="conversation-heading">
-          <div><div class="eyebrow"><span class="tiny-star">✳</span> СТУДИЯ 3D</div><h1>Создай <em>свою сцену.</em></h1><p class="intro">Опиши идею или добавь изображение для референса.</p></div>
-        </div>
-
-        <div class="model-card">
-          <div class="model-icon" aria-hidden="true">✳</div>
-          <div class="model-copy"><strong>3D Coder</strong><span id="model-status" role="status" aria-live="polite">Модель не загружена</span></div>
-          <div class="model-actions"><button id="load-model" class="load-button" type="button">Загрузить <span aria-hidden="true">↗</span></button><button id="open-local" class="local-open-button" type="button" aria-controls="local-files" aria-expanded="false">С компьютера</button><button id="download-bundle" class="local-open-button" type="button">Скачать комплект ZIP ↓</button></div>
-        </div>
-        <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
-        <div class="bundle-feedback"><p id="bundle-result" role="status" aria-live="polite" hidden></p><button id="cancel-bundle" type="button" hidden>Отменить скачивание ZIP</button></div>
-        <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. При доступном WebGPU движок запрашивает перенос всех слоёв на GPU; иначе попробует CPU, который может быть значительно медленнее.</p>
-        <details class="model-settings">
-          <summary>Настройки модели и диагностика</summary>
-        <details class="hf-token-settings">
-          <summary>Токен Hugging Face (необязательно)</summary>
-          <form id="hf-token-form" autocomplete="off">
-            <label for="hf-token">Токен с правом чтения</label>
-            <input id="hf-token" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-describedby="hf-token-note">
-            <p id="hf-token-note">Для загрузки в Forma и комплекта ZIP: токен остаётся в этой вкладке и отправляется только на huggingface.co. Ускорение не гарантировано. Отдельные прямые ссылки токен не используют.</p>
-          </form>
-        </details>
-        <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><button id="check-webgpu" type="button">Проверить WebGPU</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p><p id="webgpu-result" role="status" aria-live="polite" hidden></p></div>
-        <details class="chrome-linux-guide">
-          <summary>Chrome на Linux: запуск модели на GPU</summary>
-          <p>Сначала обнови Chrome и драйвер видеокарты, включи аппаратное ускорение в настройках Chrome и нажми выше «Проверить WebGPU». Для текущего движка нужны доступный адаптер и <code>shader-f16</code>; обрати внимание на результаты окна и тестового worker. Тестовый worker не является worker модели и не подтверждает её работу. Chrome 155–156 поддерживает shader-f16 на Linux с NVIDIA при совместимом драйвере; доступность зависит от системы.</p>
-          <ol>
-            <li>Чтобы запустить Chrome с обычным профилем, сохрани работу и полностью выйди из всех окон и фоновых процессов Chrome через меню. Иначе команда может открыть вкладку в уже работающем процессе, а новые параметры не применятся.</li>
-            <li>Проверь тип сессии в терминале:<pre><code>printf 'Сессия: %s\nWayland: %s\n' "$XDG_SESSION_TYPE" "$WAYLAND_DISPLAY"</code></pre>Если указана сессия <code>wayland</code> и задан Wayland display, запусти Chrome с обычным профилем:<pre><code>google-chrome-stable --ozone-platform=wayland</code></pre>Для X11 или если Wayland display не задан, используй:<pre><code>google-chrome-stable</code></pre></li>
-            <li>Открой Forma и нажми «Проверить WebGPU». Введи <code>chrome://gpu</code> в адресной строке и проверь WebGPU; в <code>chrome://version</code> можно увидеть командную строку запущенного процесса.</li>
-            <li>Загрузи модель и проверь в «Устройство и параметры» именно <strong>буферы весов WebGPU</strong>. Наличие адаптера само по себе не подтверждает, что движок загрузил модель на GPU.</li>
-          </ol>
-          <details>
-            <summary>Если shader-f16 всё ещё недоступен: эксперимент</summary>
-            <p>Эти экспериментальные параметры обходят некоторые ограничения WebGPU и могут снизить защиту или вызвать нестабильность. Например, в одной из версий Dawn для Vulkan на NVIDIA <code>shader-f16</code> штатно включается с драйвером 615.71; принудительное включение на старом драйвере может приводить к ошибкам, а поведение зависит от версии Chrome. Они не гарантируют работу GPU. Сначала снова полностью выйди из Chrome. Для диагностики NVIDIA Linux можно запустить:</p>
-            <p>Для Wayland-сессии:</p>
-            <pre><code>google-chrome-stable --ozone-platform=wayland --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre>
-            <p>Для X11 можно отдельно запросить OpenGL для ANGLE и Vulkan для движка:</p>
-            <pre><code>google-chrome-stable --ozone-platform=x11 --use-angle=gl --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre>
-            <p>Вариант X11 с ANGLE/OpenGL может помочь, если WebGL не запускается через ANGLE/Vulkan. Эти флаги запрашивают Vulkan и принудительно включают поддержку f16 на NVIDIA; драйвер и сборка Chrome всё равно могут не поддерживать этот режим. Затем проверь параметры в <code>chrome://version</code>, нажми «Проверить WebGPU», проверь буферы модели во время генерации и дождись проверки сцены. Для возврата к обычному запуску полностью выйди из Chrome и открой его без этих параметров.</p>
-          </details>
-          <p>WebGPU и WebGL могут работать по-разному: успешный запуск модели не гарантирует отрисовку сцены. Браузер не показывает доступный объём VRAM. Подробнее: <a href="https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips" target="_blank" rel="noopener noreferrer">диагностика WebGPU в Chrome ↗</a>.</p>
-        </details>
-        <details class="download-files" id="download-files">
-          <summary>Скачать файлы на компьютер</summary>
-          <p>Кнопка «Скачать комплект ZIP» сохраняет готовые части GGUF и компонент для картинок одним архивом. Потребуется скачать примерно 3,4 ГБ с Hugging Face; на диске может понадобиться около 7 ГБ для кэша и архива. После скачивания распакуй ZIP, чтобы выбрать части в Forma. Для выбора места сохранения нужен совместимый браузер, например актуальный Chrome или Edge. Докачка после обрыва зависит от браузера и источника файлов.</p>
-          <p>Также можно скачать файлы отдельно из Hugging Face. Ход этого скачивания виден в загрузках браузера.</p>
-          <div class="download-actions">
-            <a id="download-model-file" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/Qwen3.5-4B-3D-Coder-Q4_K_M.gguf?download=true" target="_blank" rel="noopener noreferrer">Модель Q4_K_M · 2,71 ГБ ↓</a>
-            <a href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/mmproj-Qwen3.5-4B-BF16.gguf?download=true" target="_blank" rel="noopener noreferrer">Для картинок (mmproj) · 676 МБ ↓</a>
+<div class="app-shell">
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Forma — на главную" data-i18n-aria-label="ui.brand.home"><span class="brand-mark" aria-hidden="true"></span><span>forma<span class="brand-dot">.</span></span></a>
+    <span class="workspace-name" data-i18n="ui.workspace.name">3D workspace</span>
+    <div class="topbar-actions">
+      <span class="local-indicator"><span aria-hidden="true"></span><span data-i18n="ui.local">Локально</span></span>
+      <label class="language-control"><span class="sr-only" data-i18n="ui.language.label">Язык интерфейса</span><select id="language-select" aria-label="Язык интерфейса" data-i18n-aria-label="ui.language.label"><option value="auto" data-i18n="ui.language.auto">Авто</option><option value="ru">RU</option><option value="en">EN</option></select></label>
+      <button id="model-settings-toggle" class="toolbar-button" type="button" aria-haspopup="dialog" aria-controls="model-settings-panel"><span class="settings-glyph" aria-hidden="true">☷</span><span data-i18n="ui.settings.open">Настройки</span></button>
+    </div>
+  </header>
+  <div class="mobile-workspace-bar"><nav class="mobile-tabs" role="tablist" aria-label="Области студии" data-i18n-aria-label="ui.mobile.label"><button id="mobile-chat-tab" type="button" role="tab" aria-controls="conversation-panel" aria-selected="true" data-i18n="ui.mobile.chat">Диалог</button><button id="mobile-scene-tab" type="button" role="tab" aria-controls="stage-panel" aria-selected="false" data-i18n="ui.mobile.scene">Сцена</button></nav><button id="mobile-stop-agent" class="stop-agent-button" type="button" hidden>Остановить</button></div>
+  <main id="workspace" class="workspace" data-view="chat">
+    <section id="conversation-panel" class="conversation" aria-label="Диалог с агентом" data-i18n-aria-label="ui.chat.region">
+      <div class="conversation-header"><h1 data-i18n="ui.chat.title">Диалог</h1><span class="panel-kicker" data-i18n="ui.chat.kicker">Идея → код → сцена</span></div>
+      <div class="model-card">
+        <div class="model-copy"><strong>3D Coder</strong><span id="model-status" role="status" aria-live="polite">Модель не загружена</span></div>
+        <div class="model-actions"><button id="load-model" class="load-button" type="button"><span data-i18n="ui.model.load">Загрузить</span><span aria-hidden="true">↗</span></button><button id="open-local" class="quiet-button" type="button" aria-controls="local-files" aria-expanded="false" data-i18n="ui.model.files">Файлы</button></div>
+      </div>
+      <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели" data-i18n-aria-label="ui.model.progress"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
+      <div id="conversation-scroll" class="conversation-body">
+        <div class="chat-zone" id="chat-log" aria-live="polite" aria-label="История диалога" data-i18n-aria-label="ui.chat.history">
+          <div class="welcome-message welcome-start"><span class="message-avatar" aria-hidden="true">◇</span><div><div class="message-label" data-i18n="ui.welcome.label">Готова к работе</div><p data-i18n="ui.welcome.body">Опиши сцену или начни с примера. Агент напишет код, проверит запуск и попробует исправить ошибки.</p></div></div>
+          <div class="ideas" aria-label="Примеры запросов" data-i18n-aria-label="ui.examples.label">
+            <button type="button" class="idea" data-prompt="Создай стилизованный маяк на скалистом острове, с волнами и тёплым светом." data-i18n-prompt="ui.examples.lighthousePrompt"><span data-i18n="ui.examples.lighthouse">Маяк на острове</span><span aria-hidden="true">↗</span></button>
+            <button type="button" class="idea" data-prompt="Создай маленький уютный домик в лесу в стиле low-poly, с деревьями и тропинкой." data-i18n-prompt="ui.examples.cabinPrompt"><span data-i18n="ui.examples.cabin">Домик в лесу</span><span aria-hidden="true">↗</span></button>
+            <button type="button" class="idea" data-prompt="Создай забавного маленького робота из простых геометрических форм." data-i18n-prompt="ui.examples.robotPrompt"><span data-i18n="ui.examples.robot">Маленький робот</span><span aria-hidden="true">↗</span></button>
           </div>
-          <p>Файл модели целиком подойдёт для других совместимых программ. Чтобы загрузить его в Forma, сначала раздели его на части не больше 2 ГиБ через llama-gguf-split. Для генерации только по тексту mmproj не нужен.</p>
-          <p>Доступ к Hugging Face зависит от твоей сети. Есть <a href="https://gethologram.ai/models/ccore/Qwen3.5-4B-3D-Coder/" target="_blank" rel="noopener noreferrer">сторонний каталог Hologram ↗</a>; его доступность и загрузка из РФ не проверены.</p>
-        </details>
-        </details>
-        <details class="local-files" id="local-files">
-          <summary>Свои файлы модели</summary>
-          <p>Выбери один GGUF-файл до 2 ГиБ или все части модели одновременно. Большой файл сначала нужно разделить через llama-gguf-split. Для картинок добавь отдельный файл mmproj.</p>
-          <label for="model-files">Модель: один файл или все части (.gguf)</label>
-          <input id="model-files" type="file" accept=".gguf" multiple>
-          <label for="projector-file">Компонент для картинок (.gguf), необязательно</label>
-          <input id="projector-file" type="file" accept=".gguf">
-          <button id="load-local" type="button">Загрузить свои файлы</button>
-          <p>Файлы останутся на устройстве; после перезагрузки страницы их нужно выбрать снова. Движок и предпросмотр всё ещё загружаются с внешних CDN.</p>
-        </details>
-
-        <div class="chat-zone" id="chat-log" aria-live="polite" aria-label="История диалога">
-          <div class="welcome-message"><span class="message-avatar" aria-hidden="true">✳</span><div><div class="message-label">FORMA <span>·</span> ГОТОВА К ИДЕЯМ</div><p>Привет! Что сегодня создадим? Можно начать с простой идеи или загрузить изображение для вдохновения.</p></div></div>
-          <div class="ideas" aria-label="Примеры запросов"><p>ПОПРОБУЙ НАЧАТЬ С</p><button type="button" class="idea" data-prompt="Создай стилизованный маяк на скалистом острове, с волнами и тёплым светом.">Маяк на острове <span>↗</span></button><button type="button" class="idea" data-prompt="Создай маленький уютный домик в лесу в стиле low-poly, с деревьями и тропинкой.">Домик в лесу <span>↗</span></button><button type="button" class="idea" data-prompt="Создай забавного маленького робота из простых геометрических форм.">Маленький робот <span>↗</span></button></div>
         </div>
-
-        <div id="error-panel" class="error-panel" role="alert" hidden><span aria-hidden="true">!</span><p id="error-text"></p></div>
-
-        <form id="prompt-form" class="composer">
-          <div id="image-chip" class="image-chip" hidden><img id="image-preview" alt="Прикреплённое изображение"><span id="image-name">Изображение</span><button id="remove-image" type="button" aria-label="Удалить изображение">×</button></div>
-          <label class="sr-only" for="prompt-input">Опиши свою идею</label>
-          <textarea id="prompt-input" rows="3" placeholder="Опиши свою идею..." required></textarea>
-          <div class="composer-actions"><div class="attachment"><label class="attach-button" for="image-input" title="Прикрепить референс"><span aria-hidden="true">＋</span> Референс</label><input id="image-input" type="file" accept="image/*" class="sr-only"><span class="attachment-hint">JPG, PNG, WEBP</span></div><div class="generation-actions"><button id="stop-agent" class="stop-agent-button" type="button" hidden>Остановить</button><button id="generate-button" class="send-button" type="submit" aria-label="Создать сцену">Создать <span aria-hidden="true">↗</span></button></div></div>
-          <label class="thinking-control"><input id="agent-thinking" type="checkbox" checked> Режим размышлений модели</label>
-        </form>
-        <p class="privacy-note"><span aria-hidden="true">◇</span> Модель работает на твоём устройстве</p>
         <div id="trace-mount"></div>
-      </section>
-
-      <section class="stage panel" aria-label="Предпросмотр сцены">
-        <div class="stage-header"><div class="stage-title"><span class="stage-icon" aria-hidden="true">◈</span><div><strong>Пространство</strong><span id="preview-status">Твоя сцена появится здесь</span></div></div><div class="stage-actions"><button id="reset-scene" class="icon-button" type="button" title="Очистить сцену" aria-label="Очистить сцену">↺</button><span class="vertical-line"></span><button id="copy-html" class="export-button" type="button" disabled>Копировать</button><button id="download-html" class="export-button" type="button" disabled>HTML <span aria-hidden="true">↓</span></button></div></div>
-        <div id="unverified-note" class="candidate-note" hidden><span id="unverified-warning">Код не проверен или не прошёл проверку. При открытии отдельно он выполняется без ограничений песочницы Forma.</span><button id="retry-unverified" class="export-button" type="button" disabled>Повторить проверку</button><button id="download-unverified" class="export-button" type="button" aria-describedby="unverified-warning" disabled>Скачать непроверенный HTML ↓</button></div>
-        <div class="canvas-area">
-          <iframe id="preview-frame" title="Предпросмотр сгенерированной 3D-сцены" sandbox="allow-scripts" hidden></iframe>
-          <img id="partial-preview" alt="Частичный кадр сцены" hidden>
-          <div id="preview-empty" class="empty-state"><div class="canvas-grid" aria-hidden="true"></div><div class="orbit orbit-one" aria-hidden="true"></div><div class="orbit orbit-two" aria-hidden="true"></div><div class="orbital" aria-hidden="true"><div class="shape shape-top"></div><div class="shape shape-left"></div><div class="shape shape-right"></div></div><div class="empty-copy"><span>ПРЕДПРОСМОТР</span><h2>Здесь появится<br><em>твоя сцена.</em></h2><p>Загрузи модель и опиши, что создать.</p></div></div>
-        </div>
-        <div class="stage-footer"><div><span class="status-dot"></span><span>ПРЕДПРОСМОТР В БРАУЗЕРЕ</span></div><div>HTML · THREE.JS</div></div>
-      </section>
-    </main>
-    <footer class="app-footer"><span>FORMA STUDIO <span class="footer-muted">— ЛОКАЛЬНАЯ 3D-СТУДИЯ</span></span><span class="footer-muted">МОДЕЛЬ РАБОТАЕТ НА УСТРОЙСТВЕ</span></footer>
+      </div>
+      <div id="error-panel" class="error-panel" role="alert" hidden><span aria-hidden="true">!</span><p id="error-text"></p></div>
+      <form id="prompt-form" class="composer">
+        <div id="image-chip" class="image-chip" hidden><img id="image-preview" alt="Прикреплённое изображение" data-i18n-alt="ui.image.alt"><span id="image-name">Изображение</span><button id="remove-image" type="button" aria-label="Удалить изображение" data-i18n-aria-label="ui.image.remove">×</button></div>
+        <label class="sr-only" for="prompt-input" data-i18n="ui.prompt.label">Опиши свою идею</label><textarea id="prompt-input" rows="3" placeholder="Опиши сцену или что изменить…" data-i18n-placeholder="ui.prompt.placeholder" required></textarea>
+        <div class="composer-actions"><div class="attachment"><label class="attach-button" for="image-input" title="Прикрепить референс" data-i18n-title="ui.image.attach"><span aria-hidden="true">＋</span><span data-i18n="ui.image.reference">Референс</span></label><input id="image-input" type="file" accept="image/*" class="sr-only"><span class="attachment-hint">JPG · PNG · WEBP</span></div><div class="generation-actions"><button id="stop-agent" class="stop-agent-button" type="button" hidden>Остановить</button><button id="generate-button" class="send-button" type="submit" aria-label="Создать сцену" data-i18n-aria-label="ui.prompt.submit"><span data-i18n="ui.prompt.create">Создать</span><span aria-hidden="true">↑</span></button></div></div>
+        <div class="composer-meta"><label class="thinking-control"><input id="agent-thinking" type="checkbox" checked><span data-i18n="ui.thinking">Размышления</span></label><span class="privacy-note"><span aria-hidden="true">◈</span><span data-i18n="ui.private">На твоём устройстве</span></span></div>
+      </form>
+    </section>
+    <section id="stage-panel" class="stage" aria-label="Предпросмотр сцены" data-i18n-aria-label="ui.scene.region">
+      <div class="stage-header"><div class="stage-title"><strong data-i18n="ui.scene.title">Сцена</strong><span id="preview-status">Результат появится здесь</span></div><div class="stage-actions"><button id="reset-scene" class="icon-button" type="button" title="Очистить сцену" aria-label="Очистить сцену" data-i18n-title="ui.scene.reset" data-i18n-aria-label="ui.scene.reset">↺</button><span class="vertical-line" aria-hidden="true"></span><button id="copy-html" class="export-button" type="button" disabled>Копировать</button><button id="download-html" class="export-button" type="button" disabled>HTML ↓</button></div></div>
+      <div id="unverified-note" class="candidate-note" hidden><span id="unverified-warning" data-i18n="ui.unverified.warning">Код не прошёл проверку. Скачанный HTML выполняется вне песочницы Forma.</span><div class="candidate-actions"><button id="retry-unverified" class="export-button" type="button" disabled data-i18n="ui.unverified.retry">Проверить снова</button><button id="download-unverified" class="export-button" type="button" aria-describedby="unverified-warning" disabled><span data-i18n="ui.unverified.download">Непроверенный HTML</span> ↓</button></div></div>
+      <div class="canvas-area"><iframe id="preview-frame" title="Предпросмотр сгенерированной 3D-сцены" data-i18n-title="ui.scene.frame" sandbox="allow-scripts" hidden></iframe><img id="partial-preview" alt="Частичный кадр сцены" data-i18n-alt="ui.scene.partialAlt" hidden><div id="preview-empty" class="empty-state"><span class="empty-mark" aria-hidden="true">◇</span><div class="empty-copy"><h2 data-i18n="ui.scene.emptyTitle">Место для твоей сцены</h2><p data-i18n="ui.scene.emptyBody">Загрузи модель, отправь идею — результат откроется здесь.</p></div><span class="empty-caption">THREE.JS · HTML</span></div></div>
+    </section>
+  </main>
+</div>
+<dialog id="model-settings-panel" class="settings-dialog" aria-labelledby="settings-title">
+  <div class="settings-header"><div><span class="panel-kicker" data-i18n="ui.settings.kicker">Forma / Настройка</span><h2 id="settings-title" data-i18n="ui.settings.title">Модель и запуск</h2></div><button id="model-settings-close" class="icon-button" type="button" aria-label="Закрыть настройки" data-i18n-aria-label="ui.settings.close">×</button></div>
+  <div class="settings-body">
+    <section class="settings-section"><div class="section-heading"><h3>3D Coder</h3><a class="text-link" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder" target="_blank" rel="noopener noreferrer"><span data-i18n="ui.model.about">О модели</span> ↗</a></div><p class="model-note" data-i18n="ui.model.note">Текстовая модель — около 2,7 ГБ. Для первой картинки нужны ещё 676 МБ. Файлы могут сохраняться в браузере. При доступном WebGPU движок запрашивает перенос слоёв на GPU, иначе пробует CPU.</p></section>
+    <section class="settings-section"><h3 data-i18n="ui.diagnostics.title">Диагностика</h3><div class="connection-check"><button id="check-connectivity" type="button" data-i18n="ui.diagnostics.access">Проверить доступ</button><button id="check-webgpu" type="button" data-i18n="ui.diagnostics.gpu">Проверить WebGPU</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p><p id="webgpu-result" role="status" aria-live="polite" hidden></p></div></section>
+    <details class="local-files settings-section" id="local-files"><summary data-i18n="ui.files.title">Свои файлы модели</summary><p data-i18n="ui.files.note">Выбери один GGUF-файл до 2 ГиБ или все части одновременно. Большой файл сначала раздели через llama-gguf-split. Для картинок нужен отдельный mmproj.</p><label for="model-files" data-i18n="ui.files.modelLabel">Модель: один файл или все части (.gguf)</label><input id="model-files" type="file" accept=".gguf" multiple><label for="projector-file" data-i18n="ui.files.projectorLabel">Компонент для картинок (.gguf), необязательно</label><input id="projector-file" type="file" accept=".gguf"><button id="load-local" type="button" data-i18n="ui.files.load">Загрузить свои файлы</button><p class="setting-hint" data-i18n="ui.files.privacy">Файлы остаются на устройстве. После перезагрузки страницы их может потребоваться выбрать снова. Движок и 3D-библиотека загружаются с внешних CDN.</p></details>
+    <details class="download-files settings-section" id="download-files"><summary data-i18n="ui.download.title">Скачать модель на компьютер</summary><p data-i18n="ui.download.note">ZIP содержит все части GGUF и компонент для картинок: около 3,4 ГБ загрузки. Для кэша и архива может потребоваться около 7 ГБ на диске. Распакуй ZIP перед выбором файлов в Forma.</p><button id="download-bundle" class="secondary-button" type="button"><span data-i18n="ui.download.bundle">Скачать комплект ZIP</span> ↓</button><div class="bundle-feedback"><p id="bundle-result" role="status" aria-live="polite" hidden></p><button id="cancel-bundle" type="button" hidden data-i18n="ui.download.cancel">Отменить скачивание</button></div><p class="setting-hint" data-i18n="ui.download.browser">Сохранение большого ZIP напрямую требует совместимого браузера. Докачка зависит от браузера, источника и сети.</p><div class="download-actions"><a id="download-model-file" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/Qwen3.5-4B-3D-Coder-Q4_K_M.gguf?download=true" target="_blank" rel="noopener noreferrer" data-i18n="ui.download.weights">Модель Q4_K_M · 2,71 ГБ ↓</a><a href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder/resolve/main/mmproj-Qwen3.5-4B-BF16.gguf?download=true" target="_blank" rel="noopener noreferrer" data-i18n="ui.download.projector">Для картинок (mmproj) · 676 МБ ↓</a></div><p class="setting-hint" data-i18n="ui.download.single">Целый файл модели подойдёт для совместимых программ. Для Forma файл больше 2 ГиБ сначала раздели через llama-gguf-split. Для текста mmproj не нужен.</p><p class="setting-hint" data-i18n-html="ui.download.mirror">Доступ к Hugging Face зависит от сети. Есть <a href="https://gethologram.ai/models/ccore/Qwen3.5-4B-3D-Coder/" target="_blank" rel="noopener noreferrer">каталог Hologram ↗</a>; доступность из РФ не проверена.</p></details>
+    <details class="hf-token-settings settings-section"><summary data-i18n="ui.token.title">Токен Hugging Face</summary><form id="hf-token-form" autocomplete="off"><label for="hf-token" data-i18n="ui.token.label">Токен с правом чтения, необязательно</label><input id="hf-token" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-describedby="hf-token-note"><p id="hf-token-note" class="setting-hint" data-i18n="ui.token.note">Токен остаётся в этой вкладке и отправляется только на huggingface.co. Ускорение не гарантировано. Отдельные прямые ссылки токен не используют.</p></form></details>
+    <details class="chrome-linux-guide settings-section"><summary data-i18n="ui.linux.title">Chrome на Linux и GPU</summary><p data-i18n-html="ui.linux.intro">Включи аппаратное ускорение и нажми «Проверить WebGPU». Для движка нужны адаптер и <code>shader-f16</code> в окне и тестовом worker. Это не подтверждает работу самой модели.</p><ol><li data-i18n="ui.linux.exit">Сохрани работу и полностью выйди из Chrome, включая фоновые процессы. Иначе новые параметры могут не примениться.</li><li><span data-i18n="ui.linux.session">Проверь тип сессии в терминале:</span><pre><code>printf 'Session: %s\nWayland: %s\n' "$XDG_SESSION_TYPE" "$WAYLAND_DISPLAY"</code></pre><span data-i18n-html="ui.linux.wayland">Для сессии <code>wayland</code> с доступным Wayland display:</span><pre><code>google-chrome-stable --ozone-platform=wayland</code></pre><span data-i18n="ui.linux.x11">Для X11 или без Wayland display:</span><pre><code>google-chrome-stable</code></pre></li><li data-i18n-html="ui.linux.verify">Проверь WebGPU в Forma и на <code>chrome://gpu</code>, командную строку — на <code>chrome://version</code>. Во время генерации смотри буферы весов WebGPU в трассе.</li></ol><details><summary data-i18n="ui.linux.experimentalTitle">Экспериментальные параметры NVIDIA</summary><p data-i18n-html="ui.linux.experimental">Эти параметры обходят ограничения и могут вызвать нестабильность. В одной из версий Dawn <code>shader-f16</code> на Vulkan/NVIDIA штатно включается с драйвером 615.71. Принудительное включение на старом драйвере может вызывать ошибки.</p><span class="command-label" data-i18n="ui.linux.waylandCommand">Wayland:</span><pre><code>google-chrome-stable --ozone-platform=wayland --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre><span class="command-label" data-i18n="ui.linux.x11Command">X11 с OpenGL для ANGLE:</span><pre><code>google-chrome-stable --ozone-platform=x11 --use-angle=gl --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre><p data-i18n-html="ui.linux.return">Для возврата к обычному запуску выйди из Chrome и запусти без флагов. WebGPU и WebGL могут работать по-разному; свободная VRAM недоступна. <a href="https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips" target="_blank" rel="noopener noreferrer">Диагностика Chrome ↗</a></p></details></details>
   </div>
-  <script type="module" src="./app.js?v=20261103-scaffold-2"></script>
+</dialog>
+<script type="module" src="./app.js?v=20261103-workspace-3"></script>
 </body>
 </html>
+

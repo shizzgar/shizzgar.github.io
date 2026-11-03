@@ -6,7 +6,7 @@ const fn=source.match(/function updateModelStatus\(\) \{[\s\S]*?\n\}/)?.[0];
 assert.ok(fn, 'status function exists');
 let state={loaded:true,mode:'remote',vision:false,backend:'gpu-requested'}, buffers=null;
 const ui={'model-status':{textContent:''}};
-const context=vm.createContext({ui,getModelState:()=>state,getLoadedContextInfo:()=>({model_buffers:buffers})});
+const context=vm.createContext({ui,setShellText:(node,value)=>{node.textContent=value},getModelState:()=>state,getLoadedContextInfo:()=>({model_buffers:buffers})});
 vm.runInContext(`${fn}\nthis.updateModelStatus=updateModelStatus;`,context);
 context.updateModelStatus();assert.match(ui['model-status'].textContent,/GPU запрошен/);
 buffers=[{backend:'CPU',mib:2572.9}];context.updateModelStatus();assert.match(ui['model-status'].textContent,/веса: CPU \(по журналу\)/);

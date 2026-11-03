@@ -1,12 +1,20 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js?v=20261103-scaffold-2';
-import { checkConnectivity, checkWebGPU } from './diagnostics.js?v=20261103-scaffold-2';
-import { probeInferenceWebGPU } from './webgpu-inference-probe.js?v=20261103-scaffold-2';
-import { createBundle } from './bundle-download.js?v=20261103-scaffold-2';
-import { runAgent } from './agent-loop.js?v=20261103-scaffold-2';
-import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js?v=20261103-scaffold-2';
-import { probeWebGLRecovery } from './webgl-recovery.js?v=20261103-scaffold-2';
-import { createTracePanel } from './trace-panel.js?v=20261103-scaffold-2';
-import { createProfiler } from './profiling-ui.js?v=20261103-scaffold-2';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js?v=20261103-workspace-3';
+import { checkConnectivity, checkWebGPU } from './diagnostics.js?v=20261103-workspace-3';
+import { probeInferenceWebGPU } from './webgpu-inference-probe.js?v=20261103-workspace-3';
+import { createBundle } from './bundle-download.js?v=20261103-workspace-3';
+import { runAgent } from './agent-loop.js?v=20261103-workspace-3';
+import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js?v=20261103-workspace-3';
+import { probeWebGLRecovery } from './webgl-recovery.js?v=20261103-workspace-3';
+import { createTracePanel } from './trace-panel.js?v=20261103-workspace-3';
+import { createProfiler } from './profiling-ui.js?v=20261103-workspace-3';
+import { getLanguage, getLanguageMode, setLanguage, onLanguageChange, registerMessages, applyTranslations } from './i18n.js?v=20261103-workspace-3';
+import { uiMessages } from './ui-messages.js?v=20261103-workspace-3';
+import { translateShell, createShellTextManager } from './app-language.js?v=20261103-workspace-3';
+
+registerMessages(uiMessages);
+applyTranslations();
+const shellText = createShellTextManager();
+const setShellText = (node, value) => shellText.set(node, value);
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','partial-preview','preview-status','error-panel','error-text','download-html','download-unverified','retry-unverified','unverified-note','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
@@ -16,7 +24,7 @@ ui['hf-token'].value = '';
 $('hf-token-form').addEventListener('submit', event => event.preventDefault());
 const secret = () => ui['hf-token'].value.trim();
 const redact = value => { const text = String(value ?? ''); const token = secret(); return token ? text.split(token).join('[скрыто]') : text; };
-const trace = createTracePanel(ui['trace-mount'], {redact, getSecret:secret});
+const trace = createTracePanel(ui['trace-mount'], {redact, getSecret:secret, language:getLanguage(), translate:translateShell, scrollContainer:$('conversation-scroll')});
 const profiler = createProfiler(trace);
 // Probe browser capabilities before the user commits to downloading the model.
 // This only reads local WebGPU/WebGL information; a failure must not prevent
@@ -32,25 +40,114 @@ let imageUrl = null;
 let busy = false;
 let agentController = null;
 let activeScene = null;
+let lastProgress = null;
+let bundleActive = false;
+let bundleStage = '';
+
+function setWorkspaceView(view) {
+  const workspace = $('workspace');
+  if (workspace) workspace.dataset.view = view === 'scene' ? 'scene' : 'chat';
+  for (const [id, value] of [['mobile-chat-tab','chat'], ['mobile-scene-tab','scene']]) {
+    const button = $(id);
+    if (!button) continue;
+    button.setAttribute('aria-selected', String(value === view));
+    button.tabIndex = value === view ? 0 : -1;
+  }
+}
+let settingsReturnFocus = null;
+function openModelSettings() {
+  const panel = $('model-settings-panel');
+  if (!panel || panel.open) return;
+  settingsReturnFocus = document.activeElement;
+  if (typeof panel.showModal === 'function') panel.showModal();
+  else panel.open = true;
+}
+function closeModelSettings() {
+  const panel = $('model-settings-panel');
+  if (!panel?.open) return;
+  if (typeof panel.close === 'function') panel.close();
+  else { panel.open = false; settingsReturnFocus?.focus?.(); }
+}
+function refreshModelControls() {
+  const state = getModelState();
+  const ready = state.loaded || state.suspended;
+  ui['generate-button'].disabled = busy || !ready;
+  shellText.attribute(ui['prompt-input'], 'placeholder', ready ? 'Опиши сцену или что изменить…' : 'Загрузи модель, чтобы начать…');
+}
+function syncMobileStop() {
+  const button = $('mobile-stop-agent');
+  if (!button) return;
+  button.hidden = ui['stop-agent'].hidden;
+  button.disabled = ui['stop-agent'].disabled;
+  setShellText(button, shellText.source(ui['stop-agent']) || 'Остановить');
+}
+function refreshLanguage() {
+  applyTranslations();
+  shellText.refresh();
+  trace.setLanguage?.(getLanguage());
+  const selector = $('language-select');
+  if (selector) selector.value = getLanguageMode();
+  if (!busy) updateModelStatus();
+  refreshModelControls();
+  syncMobileStop();
+  if (lastProgress && !ui['progress-wrap'].hidden) updateProgress(lastProgress);
+  renderBundleStatus();
+  if (ui['preview-frame']) ui['preview-frame'].title = translateShell('Предпросмотр сгенерированной 3D-сцены');
+}
+$('language-select')?.addEventListener('change', event => setLanguage(event.target.value));
+onLanguageChange(refreshLanguage);
+$('model-settings-toggle')?.addEventListener('click', openModelSettings);
+$('model-settings-close')?.addEventListener('click', closeModelSettings);
+$('model-settings-panel')?.addEventListener('close', () => settingsReturnFocus?.focus?.());
+$('model-settings-panel')?.addEventListener('click', event => {
+  const panel = event.currentTarget;
+  if (event.target !== panel || !panel?.open || !panel.getBoundingClientRect) return;
+  const bounds = panel.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeModelSettings();
+});
+for (const [id, view] of [['mobile-chat-tab','chat'], ['mobile-scene-tab','scene']]) {
+  $(id)?.addEventListener('click', () => setWorkspaceView(view));
+  $(id)?.addEventListener('keydown', event => {
+    if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' || event.key === 'ArrowLeft' ? 'chat' : 'scene';
+    setWorkspaceView(next);
+    $(next === 'chat' ? 'mobile-chat-tab' : 'mobile-scene-tab')?.focus();
+  });
+}
+setWorkspaceView('chat');
+setShellText(ui['model-status'], 'Модель не загружена');
+setShellText(ui['preview-status'], 'Твоя сцена появится здесь');
+setShellText(ui['stop-agent'], 'Остановить');
+setShellText(ui['copy-html'], 'Копировать');
+refreshLanguage();
 
 function error(message) {
-  ui['error-text'].textContent = redact(message || '');
+  setShellText(ui['error-text'], redact(message || ''));
   ui['error-panel'].hidden = !message;
 }
-function appendMessage(label, message) {
+function appendMessage(label, message, {raw = false, attachment = false} = {}) {
+  const scroll = $('conversation-scroll') || ui['chat-log'];
+  const follow = label === 'ТЫ' || (scroll.scrollHeight || 0) - (scroll.scrollTop || 0) - (scroll.clientHeight || 0) < 96;
   const wrap = document.createElement('div');
   wrap.className = 'welcome-message';
   const avatar = document.createElement('span'); avatar.className = 'message-avatar'; avatar.textContent = label === 'ТЫ' ? '↗' : '✳';
   const content = document.createElement('div');
-  const heading = document.createElement('div'); heading.className = 'message-label'; heading.textContent = label;
-  const body = document.createElement('p'); body.textContent = message;
+  const heading = document.createElement('div'); heading.className = 'message-label'; setShellText(heading, label);
+  const body = document.createElement('p');
+  if (label === 'ТЫ' || raw) body.textContent = message;
+  else setShellText(body, message);
   content.append(heading, body); wrap.append(avatar, content); ui['chat-log'].append(wrap);
-  ui['chat-log'].scrollTop = ui['chat-log'].scrollHeight;
+  if (attachment) {
+    const note = document.createElement('span'); note.className = 'message-attachment';
+    setShellText(note, 'Изображение-референс прикреплено'); content.append(note);
+  }
+  if (follow) scroll.scrollTop = scroll.scrollHeight;
   return body;
 }
 function setBusy(value) {
   busy = value;
-  ui['generate-button'].disabled = value;
+  refreshModelControls();
   ui['load-model'].disabled = value || getModelState().loaded || getModelState().suspended;
   ui['open-local'].disabled = value;
   ui['load-local'].disabled = value;
@@ -66,6 +163,7 @@ function setBusy(value) {
   ui['download-unverified'].disabled = value || !unverifiedHtml;
   ui['retry-unverified'].disabled = value || !unverifiedHtml;
   ui['unverified-note'].hidden = value || !unverifiedHtml;
+  syncMobileStop();
   if (!value) schedulePendingRepair();
 }
 function retainUnverified(html, session = {}) {
@@ -83,13 +181,16 @@ function clearUnverified() {
   ui['download-unverified'].disabled = true;
   ui['retry-unverified'].disabled = true;
 }
-ui['stop-agent'].addEventListener('click', () => {
+function requestStop() {
   if (!agentController) return;
   agentController.abort();
   ui['stop-agent'].disabled = true;
-  ui['stop-agent'].textContent = 'Останавливаю…';
+  setShellText(ui['stop-agent'], 'Останавливаю…');
+  syncMobileStop();
   trace.stage('Остановка запрошена', 'Если компонент модели ещё загружается, остановка произойдёт после текущего этапа.');
-});
+}
+ui['stop-agent'].addEventListener('click', requestStop);
+$('mobile-stop-agent')?.addEventListener('click', requestStop);
 function openDetailsAncestors(element) {
   for (let parent = element?.parentElement; parent; parent = parent.parentElement) {
     if (parent.tagName?.toLowerCase() === 'details') parent.open = true;
@@ -97,6 +198,7 @@ function openDetailsAncestors(element) {
 }
 ui['open-local'].addEventListener('click', () => {
   if (busy) return;
+  openModelSettings();
   openDetailsAncestors(ui['local-files']);
   ui['local-files'].open = true;
   ui['open-local'].setAttribute('aria-expanded', 'true');
@@ -106,8 +208,8 @@ ui['local-files'].addEventListener('toggle', () => {
   ui['open-local'].setAttribute('aria-expanded', String(ui['local-files'].open));
 });
 function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 Б';
-  const units = ['Б', 'КиБ', 'МиБ', 'ГиБ'];
+  if (!Number.isFinite(bytes) || bytes <= 0) return getLanguage() === 'en' ? '0 B' : '0 Б';
+  const units = getLanguage() === 'en' ? ['B', 'KiB', 'MiB', 'GiB'] : ['Б', 'КиБ', 'МиБ', 'ГиБ'];
   const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   const value = bytes / (1024 ** index);
   return `${index === 0 ? Math.floor(value) : value.toFixed(1)} ${units[index]}`;
@@ -115,11 +217,11 @@ function formatBytes(bytes) {
 function updateModelStatus() {
   const state = getModelState();
   if (state.retiring) {
-    ui['model-status'].textContent = 'Не удалось завершить движок · повторим остановку';
+    setShellText(ui['model-status'], 'Не удалось завершить движок · повторим остановку');
     return;
   }
   if (state.suspended) {
-    ui['model-status'].textContent = 'Движок модели остановлен · восстановится перед запросом';
+    setShellText(ui['model-status'], 'Движок модели остановлен · восстановится перед запросом');
     return;
   }
   if (!state.loaded) return;
@@ -136,16 +238,18 @@ function updateModelStatus() {
       else if (hasCpu && !gpuWasReported) backend = ' · веса: CPU (по журналу)';
     }
   }
-  ui['model-status'].textContent = `${name}: ${modality}${backend}`;
+  setShellText(ui['model-status'], `${name}: ${modality}${backend}`);
 }
 function startStage(text) {
-  ui['model-status'].textContent = text;
+  lastProgress = null;
+  setShellText(ui['model-status'], text);
   ui['progress-wrap'].hidden = false;
   ui['model-progress'].removeAttribute('value');
   ui['progress-track'].classList.add('indeterminate');
-  ui['model-progress-detail'].textContent = text;
+  setShellText(ui['model-progress-detail'], text);
 }
 function updateProgress({loaded, total, cachedBytes = 0}) {
+  lastProgress = {loaded, total, cachedBytes};
   const received = Number.isFinite(loaded) && loaded > 0 ? loaded : 0;
   const cached = Number.isFinite(cachedBytes) && cachedBytes > 0 ? ` · сохранено ${formatBytes(cachedBytes)}` : '';
   const known = Number.isFinite(total) && total > 0 && received <= total;
@@ -154,41 +258,52 @@ function updateProgress({loaded, total, cachedBytes = 0}) {
     const percent = Math.min(100, received / total * 100);
     ui['model-progress'].value = percent;
     ui['progress-track'].classList.remove('indeterminate');
-    ui['model-progress-detail'].textContent = `${formatBytes(received)} из ${formatBytes(total)} · ${Math.floor(percent)}%${cached}`;
+    setShellText(ui['model-progress-detail'], `${formatBytes(received)} из ${formatBytes(total)} · ${Math.floor(percent)}%${cached}`);
   } else {
     ui['model-progress'].removeAttribute('value');
     ui['progress-track'].classList.add('indeterminate');
-    ui['model-progress-detail'].textContent = received > 0 ? `Получено ${formatBytes(received)} · общий размер неизвестен${cached}` : 'Ожидание данных…';
+    setShellText(ui['model-progress-detail'], received > 0 ? `Получено ${formatBytes(received)} · общий размер неизвестен${cached}` : 'Ожидание данных…');
   }
 }
 function finishProgress() {
+  lastProgress = null;
   ui['progress-wrap'].hidden = true;
   ui['model-progress'].removeAttribute('value');
   ui['progress-track'].classList.add('indeterminate');
-  ui['model-progress-detail'].textContent = '';
+  setShellText(ui['model-progress-detail'], '');
   updateModelStatus();
+}
+function renderBundleStatus() {
+  if (!bundleActive) return;
+  const detail = shellText.source(ui['model-progress-detail']);
+  setShellText(ui['bundle-result'], bundleStage + (detail && detail !== bundleStage ? `\n${detail}` : ''));
+  ui['bundle-result'].hidden = false;
 }
 ui['download-bundle'].addEventListener('click', async () => {
   if (busy) return;
   error('');
   ui['bundle-result'].hidden = true;
   if (typeof window.showSaveFilePicker !== 'function') {
+    openModelSettings();
     openDetailsAncestors(ui['download-files']);
     ui['download-files'].open = true;
     error('Этот браузер не поддерживает сохранение большого ZIP напрямую. Попробуй актуальный Chrome или Edge; ниже доступны отдельные файлы.');
     return;
   }
   const token = ui['hf-token'].value.trim();
-  const previousStatus = ui['model-status'].textContent;
+  const previousStatus = shellText.source(ui['model-status']);
   setBusy(true);
   let controller;
   try {
     // Must run directly in the click handler to preserve browser user activation.
     const handle = await window.showSaveFilePicker({
       suggestedName: 'forma-3d-coder.zip',
-      types: [{ description: 'ZIP архив', accept: { 'application/zip': ['.zip'] } }],
+      types: [{ description: translateShell('ZIP архив'), accept: { 'application/zip': ['.zip'] } }],
     });
+    bundleActive = true;
+    bundleStage = 'Подготавливаем комплект…';
     startStage('Подготавливаем комплект…');
+    renderBundleStatus();
     const writable = await handle.createWritable();
     controller = new AbortController();
     ui['cancel-bundle'].hidden = false;
@@ -197,24 +312,31 @@ ui['download-bundle'].addEventListener('click', async () => {
       writable, token, signal: controller.signal,
       onProgress: data => {
         const stage = data.stage ? String(data.stage) : 'Скачиваем комплект…';
+        bundleStage = stage;
         if ((!data.loaded && !data.total) || stage.startsWith('Завершаем')) startStage(stage);
-        else { ui['model-status'].textContent = stage; updateProgress(data); }
+        else { setShellText(ui['model-status'], stage); updateProgress(data); }
+        renderBundleStatus();
       },
     });
-    ui['bundle-result'].textContent = 'ZIP сохранён. Распакуй его перед загрузкой частей в Forma.';
+    bundleActive = false;
+    setShellText(ui['bundle-result'], 'ZIP сохранён. Распакуй его перед загрузкой частей в Forma.');
     ui['bundle-result'].hidden = false;
   } catch (e) {
+    bundleActive = false;
     if (e?.name === 'AbortError' || controller?.signal.aborted) {
-      ui['bundle-result'].textContent = 'Скачивание отменено.';
+      setShellText(ui['bundle-result'], 'Скачивание отменено.');
       ui['bundle-result'].hidden = false;
     } else {
       error(e?.message || String(e));
+      setShellText(ui['bundle-result'], e?.message || String(e));
+      ui['bundle-result'].hidden = false;
     }
   } finally {
+    bundleActive = false;
     ui['cancel-bundle'].hidden = true;
     ui['cancel-bundle'].onclick = null;
     finishProgress();
-    ui['model-status'].textContent = previousStatus;
+    setShellText(ui['model-status'], previousStatus);
     setBusy(false);
   }
 });
@@ -222,7 +344,7 @@ function createCandidate() {
   // Keep candidates in the stage while invisible. Moving an iframe after it has
   // run can reload it; opacity keeps its real viewport and running context.
   const frame = document.createElement('iframe');
-  frame.title = 'Проверка 3D-сцены';
+  frame.title = translateShell('Проверка 3D-сцены');
   frame.setAttribute('aria-hidden', 'true');
   frame.tabIndex = -1;
   frame.style.opacity = '0';
@@ -248,14 +370,14 @@ async function parkScene() {
   const old = ui['preview-frame'];
   const placeholder = document.createElement('iframe');
   placeholder.id = 'preview-frame';
-  placeholder.title = 'Предпросмотр 3D-сцены';
+  placeholder.title = translateShell('Предпросмотр 3D-сцены');
   placeholder.hidden = true;
   old.parentElement.appendChild(placeholder);
   await discardCandidate(old);
   ui['preview-frame'] = placeholder;
   activeScene.frame = placeholder;
   activeScene.parked = true;
-  ui['preview-status'].textContent = 'Сцена временно приостановлена для модели';
+  setShellText(ui['preview-status'], 'Сцена временно приостановлена для модели');
   trace.stage('Освобождаю ресурсы сцены', 'HTML сохранён; предпросмотр будет восстановлен после генерации.');
 }
 
@@ -303,7 +425,7 @@ async function restorePreviousScene() {
     const validation = await agentValidator({status:null, session, selected, retainOnFailure:false})(scene, {});
     if (!validation.ok || !selected.frame) {
       const reason = (validation.errors || []).join('; ') || 'предпросмотр не прошёл проверку';
-      ui['preview-status'].textContent = 'Не удалось восстановить предпросмотр; HTML сохранён';
+      setShellText(ui['preview-status'], 'Не удалось восстановить предпросмотр; HTML сохранён');
       trace.stage('Не удалось восстановить предыдущую сцену', reason);
       return false;
     }
@@ -311,11 +433,11 @@ async function restorePreviousScene() {
     session.frame = selected.frame;
     session.parked = false;
     selected.frame = null;
-    ui['preview-status'].textContent = 'Предыдущая сцена восстановлена';
+    setShellText(ui['preview-status'], 'Предыдущая сцена восстановлена');
     trace.stage('Предыдущая сцена восстановлена', 'HTML запущен повторно.');
     return true;
   } catch (err) {
-    ui['preview-status'].textContent = 'Не удалось восстановить предпросмотр; HTML сохранён';
+    setShellText(ui['preview-status'], 'Не удалось восстановить предпросмотр; HTML сохранён');
     trace.stage('Не удалось восстановить предыдущую сцену', err?.message || String(err));
     return false;
   } finally {
@@ -346,7 +468,8 @@ async function showPartialPreview(html, previousEvidence, signal) {
     ui['partial-preview'].src = result.screenshot;
     ui['partial-preview'].hidden = false;
     ui['preview-empty'].hidden = true;
-    ui['preview-status'].textContent = 'Частичный кадр · сцена не прошла проверку';
+    setShellText(ui['preview-status'], 'Частичный кадр · сцена не прошла проверку');
+    setWorkspaceView('scene');
     trace.stage('Частичный кадр', 'Показан статичный кадр; проверка сцены не пройдена и визуальное качество не подтверждено.');
     return true;
   } catch (err) {
@@ -361,7 +484,7 @@ function adoptCandidate(frame, html) {
   disposeScene(old);
   old.remove();
   frame.id = 'preview-frame';
-  frame.title = 'Предпросмотр сгенерированной 3D-сцены';
+  frame.title = translateShell('Предпросмотр сгенерированной 3D-сцены');
   frame.removeAttribute('aria-hidden');
   frame.removeAttribute('tabindex');
   frame.style.opacity = '1';
@@ -370,7 +493,8 @@ function adoptCandidate(frame, html) {
   clearPartialPreview();
   ui['preview-empty'].hidden = true;
   scene = html;
-  ui['preview-status'].textContent = 'Проверен запуск сцены';
+  setShellText(ui['preview-status'], 'Проверен запуск сцены');
+  setWorkspaceView('scene');
 }
 function agentEvents(status, context, session) {
   return event => {
@@ -393,15 +517,15 @@ function agentEvents(status, context, session) {
     }
     trace.event(event);
     const attempt = `${event.attempt}/${event.maxAttempts}`;
-    if (event.type === 'generating') status.textContent = `Создаю сцену · попытка ${attempt}…`;
-    if (event.type === 'token') status.textContent = `Пишу код · попытка ${attempt} · ${event.length} символов`;
-    if (event.type === 'preflight') status.textContent = `Проверяю структуру кода · попытка ${attempt}…`;
-    if (event.type === 'validating') status.textContent = `Запускаю сцену и проверяю ошибки · попытка ${attempt}…`;
-    if (event.type === 'repairing') status.textContent = `Исправляю ошибки · следующая попытка ${event.attempt + 1}/${event.maxAttempts}…`;
+    if (event.type === 'generating') setShellText(status, `Создаю сцену · попытка ${attempt}…`);
+    if (event.type === 'token') setShellText(status, `Пишу код · попытка ${attempt} · ${event.length} символов`);
+    if (event.type === 'preflight') setShellText(status, `Проверяю структуру кода · попытка ${attempt}…`);
+    if (event.type === 'validating') setShellText(status, `Запускаю сцену и проверяю ошибки · попытка ${attempt}…`);
+    if (event.type === 'repairing') setShellText(status, `Исправляю ошибки · следующая попытка ${event.attempt + 1}/${event.maxAttempts}…`);
     if (event.type === 'validation_failed') {
       const token = ui['hf-token'].value.trim();
       const diagnostic = (event.errors || []).join('; ').slice(0, 500);
-      appendMessage('FORMA · ПРОВЕРКА', token ? diagnostic.split(token).join('[скрыто]') : diagnostic);
+      appendMessage('FORMA · ПРОВЕРКА', token ? diagnostic.split(token).join('[скрыто]') : diagnostic, {raw:true});
     }
   };
 }
@@ -450,7 +574,7 @@ function agentValidator({status, session, selected, retainOnFailure = true}) {
         trace.stage('Ошибка во время работы сцены', detail.message);
         if (detail.kind === 'webgl-context-lost') {
           if (activeScene === session && session.frame === frame && ui['preview-frame'] === frame) {
-            ui['preview-status'].textContent = 'Потерян контекст WebGL';
+            setShellText(ui['preview-status'], 'Потерян контекст WebGL');
             error(`Браузер или устройство потеряло контекст WebGL: ${detail.message}`);
           } else { contextLost = true; lateIssues.push(detail.message.slice(0, 500)); }
           return;
@@ -513,7 +637,7 @@ function queueLateRepair(session, message) {
   if (session.lateRepairStarted) {
     if (!busy && !session.failureReported) {
       session.failureReported = true;
-      ui['preview-status'].textContent = 'Ошибка во время работы сцены';
+      setShellText(ui['preview-status'], 'Ошибка во время работы сцены');
       error(`Сцена снова сообщила об ошибке после автоматического исправления: ${String(message || '').slice(0, 500)}`);
     }
     return;
@@ -539,7 +663,7 @@ async function runLateRepair(session) {
   const selected = {frame:null};
   const traceContext = {attempt:0, maxAttempts:2};
   const status = appendMessage('FORMA · ИСПРАВЛЯЮ', 'Сцена сообщила об ошибке после запуска. Исправляю её…');
-  ui['preview-status'].textContent = 'Исправляю ошибку сцены…';
+  setShellText(ui['preview-status'], 'Исправляю ошибку сцены…');
   error('');
   setBusy(true);
   trace.begin({preserve:true});
@@ -547,7 +671,8 @@ async function runLateRepair(session) {
   agentController = new AbortController();
   ui['stop-agent'].hidden = false;
   ui['stop-agent'].disabled = false;
-  ui['stop-agent'].textContent = 'Остановить';
+  setShellText(ui['stop-agent'], 'Остановить');
+  syncMobileStop();
   try {
     const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:scene, initialErrors:[diagnostic], generate:agentGenerate(traceContext),
       validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext,session), signal:agentController.signal, maxAttempts:2});
@@ -562,14 +687,14 @@ async function runLateRepair(session) {
     session.parked = false;
     selected.frame = null;
     const warning = (result.validation.warnings || []).join(' ');
-    status.textContent = redact(warning ? `Ошибка исправлена; замечание проверки: ${warning}` : 'Ошибка исправлена и запуск сцены проверен.');
+    setShellText(status, redact(warning ? `Ошибка исправлена; замечание проверки: ${warning}` : 'Ошибка исправлена и запуск сцены проверен.'));
     trace.finish('Исправлено', 'done');
   } catch (err) {
-    status.textContent = err?.name === 'AbortError' ? 'Исправление остановлено.' : 'Автоматически исправить сцену не удалось.';
+    setShellText(status, err?.name === 'AbortError' ? 'Исправление остановлено.' : 'Автоматически исправить сцену не удалось.');
     if (err?.name !== 'AbortError') trace.stage('Не удалось исправить сцену', err?.message || String(err));
     trace.finish(err?.name === 'AbortError' ? 'Остановлено' : 'Ошибка', err?.name === 'AbortError' ? 'done' : 'error');
     if (activeScene === session) {
-      ui['preview-status'].textContent = 'Ошибка во время работы сцены';
+      setShellText(ui['preview-status'], 'Ошибка во время работы сцены');
       if (err?.name !== 'AbortError') error(`Не удалось исправить ошибку: ${err?.message || String(err)}`);
     }
   } finally {
@@ -577,6 +702,7 @@ async function runLateRepair(session) {
     if (activeScene === session && session.parked) await restorePreviousScene();
     agentController = null;
     ui['stop-agent'].hidden = true;
+    syncMobileStop();
     setBusy(false);
   }
 }
@@ -595,11 +721,11 @@ ui['load-model'].addEventListener('click', async () => {
     // without waiting for a generation or blocking the page on a probe.
     void profiler.run().catch(() => {});
     updateModelStatus();
-    ui['load-model'].textContent = 'Готово ✓';
+    setShellText(ui['load-model'], 'Готово ✓');
     finishProgress();
     appendMessage('FORMA · МОДЕЛЬ ГОТОВА', 'Опиши сцену. Для первого запроса с картинкой понадобится дополнительная загрузка.');
   } catch (e) {
-    ui['model-status'].textContent = 'Не удалось загрузить модель';
+    setShellText(ui['model-status'], 'Не удалось загрузить модель');
     finishProgress();
     error(e?.message || String(e));
   } finally {
@@ -610,11 +736,11 @@ ui['load-model'].addEventListener('click', async () => {
 ui['check-connectivity'].addEventListener('click', async () => {
   const button = ui['check-connectivity'];
   const output = ui['connectivity-result'];
-  button.disabled = true; output.hidden = false; output.textContent = 'Проверяем доступ с твоего устройства…';
+  button.disabled = true; output.hidden = false; setShellText(output, 'Проверяем доступ с твоего устройства…');
   try {
     const results = await checkConnectivity();
-    output.textContent = results.map(item => `${item.label}: ${item.status === 'ok' ? 'доступен' : 'не удалось проверить'} — ${item.detail}`).join('\n') + '\nЭто проверка соединения, а не гарантия полной загрузки.';
-  } catch (e) { output.textContent = `Не удалось выполнить проверку: ${e?.message || String(e)}`; }
+    setShellText(output, results.map(item => `${item.label}: ${item.status === 'ok' ? 'доступен' : 'не удалось проверить'} — ${item.detail}`).join('\n') + '\nЭто проверка соединения, а не гарантия полной загрузки.');
+  } catch (e) { setShellText(output, `Не удалось выполнить проверку: ${e?.message || String(e)}`); }
   finally { button.disabled = false; }
 });
 $('check-webgpu').addEventListener('click', async () => {
@@ -622,7 +748,7 @@ $('check-webgpu').addEventListener('click', async () => {
   const output = $('webgpu-result');
   button.disabled = true;
   output.hidden = false;
-  output.textContent = 'Проверяю адаптер WebGPU…';
+  setShellText(output, 'Проверяю адаптер WebGPU…');
   try {
     const [availability, inferenceProbe] = await Promise.allSettled([checkWebGPU(), probeInferenceWebGPU()]);
     const detail = availability.status === 'fulfilled' && typeof availability.value?.detail === 'string'
@@ -635,13 +761,16 @@ $('check-webgpu').addEventListener('click', async () => {
       return `адаптер доступен; shader-f16: ${feature}`;
     };
     const probe = inferenceProbe.status === 'fulfilled' ? inferenceProbe.value : null;
-    output.textContent = `${detail}\nОкно браузера: ${describe(probe?.main)}.\nТестовый worker: ${describe(probe?.worker)}.\nshader-f16 необходим WebGPU-бэкенду текущего движка. Тестовый worker не является worker модели: результаты не подтверждают загрузку весов на GPU.`;
+    setShellText(output, `${detail}\nОкно браузера: ${describe(probe?.main)}.\nТестовый worker: ${describe(probe?.worker)}.\nshader-f16 необходим WebGPU-бэкенду текущего движка. Тестовый worker не является worker модели: результаты не подтверждают загрузку весов на GPU.`);
   } catch {
-    output.textContent = 'Не удалось проверить WebGPU. В Chrome открой chrome://gpu, в Edge — edge://gpu.';
+    setShellText(output, 'Не удалось проверить WebGPU. В Chrome открой chrome://gpu, в Edge — edge://gpu.');
   } finally { button.disabled = false; }
 });
 ui['load-local'].addEventListener('click', async () => {
   if (busy) return;
+  setWorkspaceView('chat');
+  // Loading progress and any validation failure belong to the main workspace.
+  closeModelSettings();
   setBusy(true); error('');
   startStage('Подготавливаем файлы…');
   try {
@@ -652,12 +781,13 @@ ui['load-local'].addEventListener('click', async () => {
     profiler.invalidate();
     void profiler.run().catch(() => {});
     finishProgress();
-    ui['load-model'].textContent = 'Готово ✓';
+    setShellText(ui['load-model'], 'Готово ✓');
+    closeModelSettings();
     updateModelStatus();
     appendMessage('FORMA · ЛОКАЛЬНАЯ МОДЕЛЬ', result.vision ? 'Можно описать сцену или приложить картинку.' : 'Можно создавать сцены по тексту. Для картинки выбери файл mmproj в разделе своих файлов.');
   } catch (e) {
     finishProgress();
-    if (!getModelState().loaded && !getModelState().suspended) { ui['model-status'].textContent = 'Модель не загружена'; ui['load-model'].textContent = 'Загрузить ↗'; }
+    if (!getModelState().loaded && !getModelState().suspended) { setShellText(ui['model-status'], 'Модель не загружена'); setShellText(ui['load-model'], 'Загрузить ↗'); }
     else { updateModelStatus(); }
     error(e?.message || String(e));
   } finally {
@@ -671,20 +801,21 @@ ui['prompt-form'].addEventListener('submit', async event => {
   const prompt = ui['prompt-input'].value.trim();
   if (!prompt) return;
   if (!getModelState().loaded && !getModelState().suspended) { error('Сначала загрузи модель кнопкой выше.'); return; }
-  error(''); setBusy(true); appendMessage('ТЫ', prompt + (image ? ' · с референсом' : ''));
+  error(''); setBusy(true); appendMessage('ТЫ', prompt, {attachment:Boolean(image)});
   trace.begin({preserve:true});
   trace.stage('Запрос пользователя', prompt);
   const status = appendMessage('FORMA · СОЗДАЮ', 'Готовлю сцену…');
-  ui['preview-status'].textContent = !ui['partial-preview'].hidden
+  setShellText(ui['preview-status'], !ui['partial-preview'].hidden
     ? 'Генерирую сцену · показан предыдущий частичный кадр'
-    : 'Генерирую сцену…';
+    : 'Генерирую сцену…');
   const session = {prompt, reference:image, frame:null, pendingError:null, lateRepairStarted:false, scheduled:false};
   const selected = {frame:null};
   const traceContext = {attempt:0, maxAttempts:3};
   agentController = new AbortController();
   ui['stop-agent'].hidden = false;
   ui['stop-agent'].disabled = false;
-  ui['stop-agent'].textContent = 'Остановить';
+  setShellText(ui['stop-agent'], 'Остановить');
+  syncMobileStop();
   try {
     if (image && !getModelState().vision && getModelState().mode === 'local' && !ui['projector-file'].files?.[0]) {
       throw new Error('Для картинки выбери файл mmproj в разделе «Свои файлы модели».');
@@ -698,9 +829,9 @@ ui['prompt-form'].addEventListener('submit', async event => {
         if (!projector) throw new Error('Для картинки выбери файл mmproj в разделе «Свои файлы модели».');
         await setLocalProjector(projector);
       }
-      status.textContent = 'Загружаю компонент для картинок и перезапускаю модель…';
+      setShellText(status, 'Загружаю компонент для картинок и перезапускаю модель…');
       startStage('Подготавливаем компонент для картинок…');
-      const call = trace.toolStart('Подключение vision', {источник:getModelState().mode === 'local' ? 'локальный файл' : 'Hugging Face'});
+      const call = trace.toolStart('Подключение vision', {source:getModelState().mode === 'local' ? 'local file' : 'Hugging Face'});
       try {
         await ensureVision({onStatus:text => {startStage(text); trace.stage(text);}, onProgress: updateProgress, token: ui['hf-token'].value.trim()});
         // Model reinitialization can change GPU/CPU placement.
@@ -735,17 +866,17 @@ ui['prompt-form'].addEventListener('submit', async event => {
     activeScene = session;
     selected.frame = null;
     const warning = (result.validation.warnings || []).join(' ');
-    status.textContent = redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : 'Сцена запущена, ошибок за время проверки не обнаружено. Внешний вид и соответствие запросу автоматически не подтверждены.');
+    setShellText(status, redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : 'Сцена запущена, ошибок за время проверки не обнаружено. Внешний вид и соответствие запросу автоматически не подтверждены.'));
     trace.finish('Готово', 'done');
     ui['prompt-input'].value = '';
     clearImage();
   } catch (e) {
-    status.textContent = e?.name === 'AbortError' ? 'Создание сцены остановлено.' : 'Не получилось создать и проверить сцену.';
-    ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
+    setShellText(status, e?.name === 'AbortError' ? 'Создание сцены остановлено.' : 'Не получилось создать и проверить сцену.');
+    setShellText(ui['preview-status'], scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана');
     finishProgress();
     if (!getModelState().loaded && !getModelState().suspended) {
-      ui['model-status'].textContent = 'Модель не загружена';
-      ui['load-model'].textContent = 'Загрузить ↗';
+      setShellText(ui['model-status'], 'Модель не загружена');
+      setShellText(ui['load-model'], 'Загрузить ↗');
     } else {
       updateModelStatus();
     }
@@ -760,6 +891,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
     if (activeScene?.parked) await restorePreviousScene();
     agentController = null;
     ui['stop-agent'].hidden = true;
+    syncMobileStop();
     setBusy(false);
   }
 });
@@ -797,11 +929,12 @@ ui['retry-unverified'].addEventListener('click', async () => {
   const signal = agentController.signal;
   ui['stop-agent'].hidden = false;
   ui['stop-agent'].disabled = false;
-  ui['stop-agent'].textContent = 'Остановить';
+  setShellText(ui['stop-agent'], 'Остановить');
+  syncMobileStop();
   try {
     await parkScene();
     if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
-    ui['preview-status'].textContent = 'Повторно проверяю сцену…';
+    setShellText(ui['preview-status'], 'Повторно проверяю сцену…');
     let validation = await agentValidator({status, session, selected, retainOnFailure:false})(html, {signal});
     if (!validation.ok) firstEvidence = validation.evidence || null;
     if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
@@ -817,13 +950,13 @@ ui['retry-unverified'].addEventListener('click', async () => {
       if (session.reference && !modelState.vision && modelState.mode === 'local' && !ui['projector-file'].files?.[0]) {
         throw new Error('Для исправления с изображением выбери компонент mmproj. HTML сохранён.');
       }
-      status.textContent = 'Проверка обнаружила ошибки. Восстанавливаю модель для исправления…';
+      setShellText(status, 'Проверка обнаружила ошибки. Восстанавливаю модель для исправления…');
       trace.stage('Исправление', 'Проверка нашла ошибки; передаю их модели вместе с сохранённым HTML.');
       await activateModel(signal);
       if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
       if (session.reference && !getModelState().vision) {
         if (getModelState().mode === 'local') await setLocalProjector(ui['projector-file'].files[0]);
-        const call = trace.toolStart('Подключение vision', {источник:getModelState().mode === 'local' ? 'локальный файл' : 'Hugging Face'});
+        const call = trace.toolStart('Подключение vision', {source:getModelState().mode === 'local' ? 'local file' : 'Hugging Face'});
         try {
           await ensureVision({onStatus:text => {startStage(text); trace.stage(text);}, onProgress:updateProgress, token:ui['hf-token'].value.trim()});
           profiler.invalidate();
@@ -856,12 +989,12 @@ ui['retry-unverified'].addEventListener('click', async () => {
       clearImage();
     }
     const warning = (validation.warnings || []).join(' ');
-    status.textContent = redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : 'Сцена запущена; ошибок за время проверки не обнаружено.');
+    setShellText(status, redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : 'Сцена запущена; ошибок за время проверки не обнаружено.'));
     trace.finish('Готово', 'done');
   } catch (err) {
     const cancelled = err?.name === 'AbortError';
-    status.textContent = cancelled ? 'Проверка остановлена; HTML сохранён.' : 'Сцена не прошла повторную проверку; HTML сохранён.';
-    ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
+    setShellText(status, cancelled ? 'Проверка остановлена; HTML сохранён.' : 'Сцена не прошла повторную проверку; HTML сохранён.');
+    setShellText(ui['preview-status'], scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана');
     if (!cancelled) { error(err?.message || String(err)); trace.stage('Повторная проверка не прошла', err?.message || String(err)); }
     if (!cancelled && !scene) {
       const candidateEvidence = retryContext?.fallbackHtml === unverifiedHtml
@@ -875,6 +1008,7 @@ ui['retry-unverified'].addEventListener('click', async () => {
     if (activeScene === previousSession && previousSession?.parked) await restorePreviousScene();
     agentController = null;
     ui['stop-agent'].hidden = true;
+    syncMobileStop();
     setBusy(false);
   }
 });
@@ -885,7 +1019,7 @@ ui['reset-scene'].addEventListener('click', async () => {
     await releaseScene(ui['preview-frame']);
     activeScene = null;
     scene = ''; clearUnverified(); clearPartialPreview(); ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
-    ui['preview-status'].textContent = 'Твоя сцена появится здесь'; ui['download-html'].disabled = true; ui['copy-html'].disabled = true; error('');
+    setShellText(ui['preview-status'], 'Твоя сцена появится здесь'); ui['download-html'].disabled = true; ui['copy-html'].disabled = true; error('');
   } finally { setBusy(false); }
 });
 ui['download-html'].addEventListener('click', () => {
@@ -899,6 +1033,6 @@ ui['download-unverified'].addEventListener('click', () => {
   const a = document.createElement('a'); a.href = url; a.download = 'forma-unverified.html'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 ui['copy-html'].addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(scene); ui['copy-html'].textContent = 'Скопировано ✓'; setTimeout(() => { ui['copy-html'].textContent = 'Копировать'; }, 2000); }
+  try { await navigator.clipboard.writeText(scene); setShellText(ui['copy-html'], 'Скопировано ✓'); setTimeout(() => { setShellText(ui['copy-html'], 'Копировать'); }, 2000); }
   catch { error('Не удалось скопировать код. Используй кнопку HTML для скачивания.'); }
 });
