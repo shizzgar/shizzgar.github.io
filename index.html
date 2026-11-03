@@ -58,9 +58,9 @@
             <p>Эти экспериментальные параметры обходят некоторые ограничения WebGPU и могут снизить защиту или вызвать нестабильность. Например, в одной из версий Dawn для Vulkan на NVIDIA <code>shader-f16</code> штатно включается с драйвером 615.71; принудительное включение на старом драйвере может приводить к ошибкам, а поведение зависит от версии Chrome. Они не гарантируют работу GPU. Сначала снова полностью выйди из Chrome. Для диагностики NVIDIA Linux можно запустить:</p>
             <p>Для Wayland-сессии:</p>
             <pre><code>google-chrome-stable --ozone-platform=wayland --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre>
-            <p>Для X11:</p>
-            <pre><code>google-chrome-stable --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre>
-            <p>Эти флаги запрашивают Vulkan и принудительно включают поддержку f16 на NVIDIA; драйвер и сборка Chrome всё равно могут не поддерживать этот режим. Затем проверь параметры в <code>chrome://version</code>, нажми «Проверить WebGPU» и проверь буферы модели после загрузки. Для возврата к обычному запуску полностью выйди из Chrome и открой его без этих параметров.</p>
+            <p>Для X11 можно отдельно запросить OpenGL для ANGLE и Vulkan для движка:</p>
+            <pre><code>google-chrome-stable --ozone-platform=x11 --use-angle=gl --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre>
+            <p>Вариант X11 с ANGLE/OpenGL может помочь, если WebGL не запускается через ANGLE/Vulkan. Эти флаги запрашивают Vulkan и принудительно включают поддержку f16 на NVIDIA; драйвер и сборка Chrome всё равно могут не поддерживать этот режим. Затем проверь параметры в <code>chrome://version</code>, нажми «Проверить WebGPU», проверь буферы модели во время генерации и дождись проверки сцены. Для возврата к обычному запуску полностью выйди из Chrome и открой его без этих параметров.</p>
           </details>
           <p>WebGPU и WebGL могут работать по-разному: успешный запуск модели не гарантирует отрисовку сцены. Браузер не показывает доступный объём VRAM. Подробнее: <a href="https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips" target="_blank" rel="noopener noreferrer">диагностика WebGPU в Chrome ↗</a>.</p>
         </details>
