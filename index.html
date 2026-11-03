@@ -44,6 +44,26 @@
           </form>
         </details>
         <div class="connection-check"><button id="check-connectivity" type="button">Проверить доступ</button><button id="check-webgpu" type="button">Проверить WebGPU</button><p id="connectivity-result" role="status" aria-live="polite" hidden></p><p id="webgpu-result" role="status" aria-live="polite" hidden></p></div>
+        <details class="chrome-linux-guide">
+          <summary>Chrome на Linux: запуск модели на GPU</summary>
+          <p>Сначала обнови Chrome и драйвер видеокарты, включи аппаратное ускорение в настройках Chrome и нажми выше «Проверить WebGPU». Для текущего движка нужны доступный адаптер и <code>shader-f16</code>; обрати внимание на результаты окна и тестового worker. Тестовый worker не является worker модели и не подтверждает её работу. Chrome 155–156 поддерживает shader-f16 на Linux с NVIDIA при совместимом драйвере; доступность зависит от системы.</p>
+          <ol>
+            <li>Чтобы запустить Chrome с обычным профилем, сохрани работу и полностью выйди из всех окон и фоновых процессов Chrome через меню. Иначе команда может открыть вкладку в уже работающем процессе, а новые параметры не применятся.</li>
+            <li>Проверь тип сессии в терминале:<pre><code>printf 'Сессия: %s\nWayland: %s\n' "$XDG_SESSION_TYPE" "$WAYLAND_DISPLAY"</code></pre>Если указана сессия <code>wayland</code> и задан Wayland display, запусти Chrome с обычным профилем:<pre><code>google-chrome-stable --ozone-platform=wayland</code></pre>Для X11 или если Wayland display не задан, используй:<pre><code>google-chrome-stable</code></pre></li>
+            <li>Открой Forma и нажми «Проверить WebGPU». Введи <code>chrome://gpu</code> в адресной строке и проверь WebGPU; в <code>chrome://version</code> можно увидеть командную строку запущенного процесса.</li>
+            <li>Загрузи модель и проверь в «Устройство и параметры» именно <strong>буферы весов WebGPU</strong>. Наличие адаптера само по себе не подтверждает, что движок загрузил модель на GPU.</li>
+          </ol>
+          <details>
+            <summary>Если shader-f16 всё ещё недоступен: эксперимент</summary>
+            <p>Эти экспериментальные параметры обходят некоторые ограничения WebGPU и могут снизить защиту или вызвать нестабильность. Например, в одной из версий Dawn для Vulkan на NVIDIA <code>shader-f16</code> штатно включается с драйвером 615.71; принудительное включение на старом драйвере может приводить к ошибкам, а поведение зависит от версии Chrome. Они не гарантируют работу GPU. Сначала снова полностью выйди из Chrome. Для диагностики NVIDIA Linux можно запустить:</p>
+            <p>Для Wayland-сессии:</p>
+            <pre><code>google-chrome-stable --ozone-platform=wayland --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre>
+            <p>Для X11:</p>
+            <pre><code>google-chrome-stable --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre>
+            <p>Эти флаги запрашивают Vulkan и принудительно включают поддержку f16 на NVIDIA; драйвер и сборка Chrome всё равно могут не поддерживать этот режим. Затем проверь параметры в <code>chrome://version</code>, нажми «Проверить WebGPU» и проверь буферы модели после загрузки. Для возврата к обычному запуску полностью выйди из Chrome и открой его без этих параметров.</p>
+          </details>
+          <p>WebGPU и WebGL могут работать по-разному: успешный запуск модели не гарантирует отрисовку сцены. Браузер не показывает доступный объём VRAM. Подробнее: <a href="https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips" target="_blank" rel="noopener noreferrer">диагностика WebGPU в Chrome ↗</a>.</p>
+        </details>
         <details class="download-files" id="download-files">
           <summary>Скачать файлы на компьютер</summary>
           <p>Кнопка «Скачать комплект ZIP» сохраняет готовые части GGUF и компонент для картинок одним архивом. Потребуется скачать примерно 3,4 ГБ с Hugging Face; на диске может понадобиться около 7 ГБ для кэша и архива. После скачивания распакуй ZIP, чтобы выбрать части в Forma. Для выбора места сохранения нужен совместимый браузер, например актуальный Chrome или Edge. Докачка после обрыва зависит от браузера и источника файлов.</p>

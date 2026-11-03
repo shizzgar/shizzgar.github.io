@@ -49,3 +49,11 @@
 .thinking-control{display:flex;align-items:center;gap:7px;margin-top:10px;color:#a6b29e;font-size:11px;cursor:pointer}
 .thinking-control input{accent-color:#bbdf91}
 .candidate-note{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 23px;border-bottom:1px solid var(--line);color:#e1c99a;font-size:12px;line-height:1.45}.candidate-note[hidden]{display:none}.candidate-note .export-button{flex:none;min-height:34px}@media(max-width:600px){.candidate-note{align-items:flex-start;flex-direction:column;padding:10px 13px}}
+.chrome-linux-guide{margin:9px 2px 0;color:#c9d4c1;font-size:11px;line-height:1.55}
+.chrome-linux-guide summary{cursor:pointer;color:#c9dcb9;font-weight:700}
+.chrome-linux-guide p{margin:8px 0;color:#aebaa6}
+.chrome-linux-guide ol{margin:9px 0;padding-left:19px}
+.chrome-linux-guide li{margin:9px 0}
+.chrome-linux-guide code{color:#e1f7bc;overflow-wrap:anywhere}
+.chrome-linux-guide pre{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:7px 0;padding:8px;border:1px solid #3b4935;border-radius:5px;background:#171d16;font-size:10px;line-height:1.5;user-select:all}
+.chrome-linux-guide a{color:#d2eca8}
