@@ -48,3 +48,4 @@
 .stop-agent-button:hover{background:#513429}
 .thinking-control{display:flex;align-items:center;gap:7px;margin-top:10px;color:#a6b29e;font-size:11px;cursor:pointer}
 .thinking-control input{accent-color:#bbdf91}
+.candidate-note{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 23px;border-bottom:1px solid var(--line);color:#e1c99a;font-size:12px;line-height:1.45}.candidate-note[hidden]{display:none}.candidate-note .export-button{flex:none;min-height:34px}@media(max-width:600px){.candidate-note{align-items:flex-start;flex-direction:column;padding:10px 13px}}

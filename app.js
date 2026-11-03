@@ -4,11 +4,12 @@ import { probeInferenceWebGPU } from './webgpu-inference-probe.js';
 import { createBundle } from './bundle-download.js';
 import { runAgent } from './agent-loop.js';
 import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js';
+import { probeWebGLRecovery } from './webgl-recovery.js';
 import { createTracePanel } from './trace-panel.js';
 import { createProfiler } from './profiling-ui.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','download-unverified','retry-unverified','unverified-note','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
 // The token is never stored by the app; discard any value restored by the browser.
 ui['hf-token'].value = '';
 // The form is present for browser password-field semantics, not submission.
@@ -22,6 +23,10 @@ const profiler = createProfiler(trace);
 // loading or using the application.
 void profiler.run().catch(() => {});
 let scene = '';
+// Separate from the last accepted scene: a complete model response can be
+// useful to the user even if execution checks fail or a later repair aborts.
+let unverifiedHtml = '';
+let unverifiedContext = null;
 let image = null;
 let imageUrl = null;
 let busy = false;
@@ -58,7 +63,25 @@ function setBusy(value) {
   ui['reset-scene'].disabled = value;
   ui['copy-html'].disabled = value || !scene;
   ui['download-html'].disabled = value || !scene;
+  ui['download-unverified'].disabled = value || !unverifiedHtml;
+  ui['retry-unverified'].disabled = value || !unverifiedHtml;
+  ui['unverified-note'].hidden = value || !unverifiedHtml;
   if (!value) schedulePendingRepair();
+}
+function retainUnverified(html, session = {}) {
+  if (typeof html !== 'string' || !html.trim()) return;
+  unverifiedHtml = html;
+  unverifiedContext = {prompt:session.prompt || '', reference:session.reference || null};
+  ui['unverified-note'].hidden = busy;
+  ui['download-unverified'].disabled = busy;
+  ui['retry-unverified'].disabled = busy;
+}
+function clearUnverified() {
+  unverifiedHtml = '';
+  unverifiedContext = null;
+  ui['unverified-note'].hidden = true;
+  ui['download-unverified'].disabled = true;
+  ui['retry-unverified'].disabled = true;
 }
 ui['stop-agent'].addEventListener('click', () => {
   if (!agentController) return;
@@ -270,7 +293,7 @@ async function restorePreviousScene() {
   const selected = {frame:null};
   try {
     await pauseModel();
-    const validation = await agentValidator({status:null, session, selected})(scene, {});
+    const validation = await agentValidator({status:null, session, selected, retainOnFailure:false})(scene, {});
     if (!validation.ok || !selected.frame) {
       const reason = (validation.errors || []).join('; ') || 'предпросмотр не прошёл проверку';
       ui['preview-status'].textContent = 'Не удалось восстановить предпросмотр; HTML сохранён';
@@ -307,9 +330,12 @@ function adoptCandidate(frame, html) {
   scene = html;
   ui['preview-status'].textContent = 'Проверен запуск сцены';
 }
-function agentEvents(status, context) {
+function agentEvents(status, context, session) {
   return event => {
     if (event.type === 'generating') { context.attempt = event.attempt; context.maxAttempts = event.maxAttempts; }
+    // Save the complete document before static checking. If that check fails
+    // and a later repair is cancelled, the previous candidate is still useful.
+    if (event.type === 'preflight') retainUnverified(event.html, session);
     trace.event(event);
     const attempt = `${event.attempt}/${event.maxAttempts}`;
     if (event.type === 'generating') status.textContent = `Создаю сцену · попытка ${attempt}…`;
@@ -351,8 +377,11 @@ function agentGenerate(context) {
     }
   };
 }
-function agentValidator({status, session, selected}) {
+function agentValidator({status, session, selected, retainOnFailure = true}) {
   return async (html, {signal}) => {
+    // Preserve the complete candidate even when validation is interrupted or
+    // a later repair fails; restoring an accepted scene must not overwrite it.
+    if (retainOnFailure) retainUnverified(html, session);
     if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
     await pauseModel();
     if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
@@ -386,11 +415,36 @@ function agentValidator({status, session, selected}) {
         if (contextLost) validation.contextLost = true;
         validation.errors = [...(validation.errors || []), ...lateIssues];
       }
+      if (!validation.ok) {
+        // Release the failed scene before checking whether a fresh graphics
+        // context can be created and before considering another model load.
+        await discardCandidate(frame);
+        if (validation.contextLost && validation.infrastructureErrorOther === false) {
+          trace.stage('Проверяю восстановление WebGL', 'Пробую создать небольшой тестовый контекст после освобождения сцены.');
+          let recovery;
+          try { recovery = await probeWebGLRecovery({signal}); }
+          catch (error) {
+            if (error?.name === 'AbortError' || signal?.aborted) throw error;
+            recovery = {state:'unknown'};
+          }
+          if (recovery.state === 'unavailable') {
+            const message = 'Сейчас не удалось создать тестовый WebGL-контекст. Автоматическое исправление остановлено: повторный запуск сцены пока не подтверждён.';
+            validation.infrastructureErrorOther = true;
+            validation.retryable = false;
+            validation.errors = [...(validation.errors || []), message];
+            trace.stage('WebGL пока недоступен', message);
+          } else if (recovery.state === 'available') {
+            trace.stage('Тестовый WebGL-контекст создан', 'Это не гарантирует запуск сгенерированной сцены.');
+          } else {
+            trace.stage('Проверка WebGL не дала результата', 'Причина потери контекста остаётся неизвестной.');
+          }
+        }
+      }
       trace.toolFinish(run, validation.ok
         ? {output:{evidence:validation.evidence, warnings:validation.warnings}}
         : {error:(validation.errors || []).join('\n') || 'Проверка не прошла'});
       runFinished = true;
-      if (validation.ok) selected.frame = frame; else await discardCandidate(frame);
+      if (validation.ok) selected.frame = frame;
       return validation;
     } catch (err) {
       if (!runFinished) trace.toolFinish(run, {error:err});
@@ -441,12 +495,14 @@ async function runLateRepair(session) {
   ui['stop-agent'].textContent = 'Остановить';
   try {
     const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:scene, initialErrors:[diagnostic], generate:agentGenerate(traceContext),
-      validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext), signal:agentController.signal, maxAttempts:2});
+      validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext,session), signal:agentController.signal, maxAttempts:2});
+    if (!result.ok && result.lastHtml) retainUnverified(result.lastHtml, session);
     if (!result.ok) throw new Error(result.reason === 'output_limit'
       ? 'Достигнут лимит вывода или контекста до получения полного HTML. Полученные фрагменты доступны в трассе; предыдущая сцена сохранена.'
       : (result.errors || []).join('; ') || 'Не удалось исправить ошибку.');
     if (activeScene !== session || !selected.frame) throw new Error('Сцена изменилась во время исправления.');
     adoptCandidate(selected.frame, result.html);
+    clearUnverified();
     session.frame = selected.frame;
     session.parked = false;
     selected.frame = null;
@@ -603,9 +659,10 @@ ui['prompt-form'].addEventListener('submit', async event => {
       prompt, image, previousCode: scene, generate:agentGenerate(traceContext),
       signal: agentController.signal,
       maxAttempts: 3,
-      onEvent: agentEvents(status,traceContext),
+      onEvent: agentEvents(status,traceContext,session),
       validate: agentValidator({status,session,selected}),
     });
+    if (!result.ok && result.lastHtml) retainUnverified(result.lastHtml, session);
     if (!result.ok) {
       const details = (result.errors || []).join('; ') || 'Проверка не завершилась успешно.';
       if (result.reason === 'output_limit') {
@@ -615,6 +672,7 @@ ui['prompt-form'].addEventListener('submit', async event => {
     }
     if (!selected.frame) throw new Error('Проверенная сцена недоступна для предпросмотра.');
     adoptCandidate(selected.frame, result.html);
+    clearUnverified();
     session.frame = selected.frame;
     session.parked = false;
     activeScene = session;
@@ -660,13 +718,67 @@ ui['image-input'].addEventListener('change', event => {
 });
 ui['remove-image'].addEventListener('click', clearImage);
 document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => { ui['prompt-input'].value = button.dataset.prompt; ui['prompt-input'].focus(); }));
+// Re-run the saved candidate without generating it again. The same sandbox,
+// GPU resource handoff, and execution checks are used as for a new scene.
+ui['retry-unverified'].addEventListener('click', async () => {
+  if (busy || !unverifiedHtml) return;
+  const html = unverifiedHtml;
+  const session = {prompt:unverifiedContext?.prompt || '', reference:unverifiedContext?.reference || null, frame:null, pendingError:null, lateRepairStarted:false, scheduled:false};
+  const selected = {frame:null};
+  const previousSession = activeScene;
+  error('');
+  setBusy(true);
+  trace.begin({preserve:true});
+  trace.stage('Повторная проверка', 'Повторно запускаю сохранённый HTML без генерации модели.');
+  const status = appendMessage('FORMA · ПРОВЕРКА', 'Проверяю сохранённую сцену…');
+  agentController = new AbortController();
+  const signal = agentController.signal;
+  ui['stop-agent'].hidden = false;
+  ui['stop-agent'].disabled = false;
+  ui['stop-agent'].textContent = 'Остановить';
+  try {
+    await parkScene();
+    if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+    ui['preview-status'].textContent = 'Повторно проверяю сцену…';
+    const validation = await agentValidator({status, session, selected, retainOnFailure:false})(html, {signal});
+    if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+    if (!validation.ok || !selected.frame) throw new Error((validation.errors || []).join('; ') || 'Сцена не прошла проверку запуска.');
+    adoptCandidate(selected.frame, html);
+    session.frame = selected.frame;
+    session.parked = false;
+    selected.frame = null;
+    activeScene = session;
+    clearUnverified();
+    // Only clear the draft if the user has not changed it since the candidate
+    // was generated; an unrelated draft must survive a successful recheck.
+    if (ui['prompt-input'].value.trim() === session.prompt && image === session.reference) {
+      ui['prompt-input'].value = '';
+      clearImage();
+    }
+    const warning = (validation.warnings || []).join(' ');
+    status.textContent = redact(warning ? `Сцена запущена. Замечание проверки: ${warning}` : 'Сцена запущена; ошибок за время проверки не обнаружено.');
+    trace.finish('Готово', 'done');
+  } catch (err) {
+    const cancelled = err?.name === 'AbortError';
+    status.textContent = cancelled ? 'Проверка остановлена; HTML сохранён.' : 'Сцена не прошла повторную проверку; HTML сохранён.';
+    ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
+    if (!cancelled) { error(err?.message || String(err)); trace.stage('Повторная проверка не прошла', err?.message || String(err)); }
+    trace.finish(cancelled ? 'Остановлено' : 'Ошибка', cancelled ? 'done' : 'error');
+  } finally {
+    await discardCandidate(selected.frame);
+    if (activeScene === previousSession && previousSession?.parked) await restorePreviousScene();
+    agentController = null;
+    ui['stop-agent'].hidden = true;
+    setBusy(false);
+  }
+});
 ui['reset-scene'].addEventListener('click', async () => {
   if (busy) return;
   setBusy(true);
   try {
     await releaseScene(ui['preview-frame']);
     activeScene = null;
-    scene = ''; ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
+    scene = ''; clearUnverified(); ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
     ui['preview-status'].textContent = 'Твоя сцена появится здесь'; ui['download-html'].disabled = true; ui['copy-html'].disabled = true; error('');
   } finally { setBusy(false); }
 });
@@ -674,6 +786,11 @@ ui['download-html'].addEventListener('click', () => {
   if (!scene) return;
   const url = URL.createObjectURL(new Blob([scene], {type: 'text/html;charset=utf-8'}));
   const a = document.createElement('a'); a.href = url; a.download = 'forma-scene.html'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+ui['download-unverified'].addEventListener('click', () => {
+  if (!unverifiedHtml) return;
+  const url = URL.createObjectURL(new Blob([unverifiedHtml], {type: 'text/html;charset=utf-8'}));
+  const a = document.createElement('a'); a.href = url; a.download = 'forma-unverified.html'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 ui['copy-html'].addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(scene); ui['copy-html'].textContent = 'Скопировано ✓'; setTimeout(() => { ui['copy-html'].textContent = 'Копировать'; }, 2000); }

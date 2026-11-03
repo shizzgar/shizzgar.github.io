@@ -207,7 +207,7 @@ export async function runAgent({ prompt, image = null, previousCode = '', initia
       previous = truncated ? (typeof previousCode === 'string' ? previousCode : '') : lastOutput;
     } else {
       lastHtml = html;
-      onEvent({type:'preflight', attempt, maxAttempts: attemptsLimit});
+      onEvent({type:'preflight', attempt, maxAttempts: attemptsLimit, html});
       const preflight = preflightHtml(html);
       if (!preflight.ok) result = {...preflight, retryable:true};
       else {

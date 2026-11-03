@@ -154,3 +154,14 @@ const mixedRuntime=await runAgent({prompt:'маяк',generate:async()=>html,vali
 assert.equal(mixedRuntime.ok,true);assert.equal(sequenceChecks,3,'a regular code repair followed by one context-loss repair is permitted');
 assert.equal(sequenceEvents.filter(e=>e.type==='context_loss_repair').length,1);
 console.log('PASS one bounded WebGL loss repair and mixed infrastructure failures');
+
+// The full document is made available before a failed static check, so the
+// caller can preserve it even if a subsequent model repair is cancelled.
+const preflightCandidate = '<html><body><script>let value = ;</script></body></html>';
+const preservedEvents = []; let preflightCalls = 0;
+await assert.rejects(runAgent({prompt:'test', generate:async()=>{
+  if (++preflightCalls === 1) return preflightCandidate;
+  throw new DOMException('stopped', 'AbortError');
+}, validate:async()=>{throw new Error('invalid script should not execute')}, onEvent:e=>preservedEvents.push(e)}), {name:'AbortError'});
+assert.equal(preservedEvents.find(e=>e.type==='preflight')?.html,preflightCandidate);
+console.log('PASS complete candidate available before an interrupted preflight repair');
