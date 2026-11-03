@@ -1,12 +1,12 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js';
-import { checkConnectivity, checkWebGPU } from './diagnostics.js';
-import { probeInferenceWebGPU } from './webgpu-inference-probe.js';
-import { createBundle } from './bundle-download.js';
-import { runAgent } from './agent-loop.js';
-import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js';
-import { probeWebGLRecovery } from './webgl-recovery.js';
-import { createTracePanel } from './trace-panel.js';
-import { createProfiler } from './profiling-ui.js';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js?v=20261103-scaffold-2';
+import { checkConnectivity, checkWebGPU } from './diagnostics.js?v=20261103-scaffold-2';
+import { probeInferenceWebGPU } from './webgpu-inference-probe.js?v=20261103-scaffold-2';
+import { createBundle } from './bundle-download.js?v=20261103-scaffold-2';
+import { runAgent } from './agent-loop.js?v=20261103-scaffold-2';
+import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js?v=20261103-scaffold-2';
+import { probeWebGLRecovery } from './webgl-recovery.js?v=20261103-scaffold-2';
+import { createTracePanel } from './trace-panel.js?v=20261103-scaffold-2';
+import { createProfiler } from './profiling-ui.js?v=20261103-scaffold-2';
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','partial-preview','preview-status','error-panel','error-text','download-html','download-unverified','retry-unverified','unverified-note','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));

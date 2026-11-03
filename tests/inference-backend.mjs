@@ -28,7 +28,7 @@ const local=await synth({prepareLocalModel:async(shards,projector)=>{events.push
 const download=await synth({downloadFiles:async()=>{events.push('download');return [new Blob(['x'])]},modelShardUrls:()=>['test']});
 const logs=new vm.SourceTextModule(loggerSource,{context});
 const module=new vm.SourceTextModule(source,{context,importModuleDynamically:async()=>w});
-await module.link(spec=>spec==='./local-model.js'?local:spec==='./gpu-engine-log.js'?logs:download);await module.evaluate();
+await module.link(spec=>(spec=spec.split('?')[0],spec==='./local-model.js'?local:spec==='./gpu-engine-log.js'?logs:download));await module.evaluate();
 const api=module.namespace;
 const shard=[new Blob(['shard'])], projector=new Blob(['projector']);
 const statuses=[];

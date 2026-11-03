@@ -1,6 +1,6 @@
 // Progress-aware downloads using wllama 3.8.1's public CacheManager.
 // The stage progress covers file transfer only, never model/GPU initialization.
-import { downloadResumable } from './resumable-cache.js';
+import { downloadResumable } from './resumable-cache.js?v=20261103-scaffold-2';
 
 export function modelShardUrls(instance, firstUrl) {
   const parse = instance?.modelManager?.constructor?.parseModelUrl;
