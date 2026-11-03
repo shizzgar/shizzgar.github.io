@@ -146,8 +146,8 @@ for (const result of [
   assert.equal(count,1,'a mixed, unclassified or non-WebGL infrastructure problem must not be retried');
   assert.equal(mixed.reason,'validation_unavailable');
 }
-let sequenceChecks=0;const sequenceEvents=[];
-const mixedRuntime=await runAgent({prompt:'маяк',generate:async()=>html,validate:async()=>{
+let sequenceChecks=0;let sequenceGenerations=0;const sequenceEvents=[];
+const mixedRuntime=await runAgent({prompt:'маяк',generate:async()=>html.replace('</body>',`<span>${++sequenceGenerations}</span></body>`),validate:async()=>{
   sequenceChecks++;
   return sequenceChecks===1?{ok:false,errors:['ошибка кода']} : sequenceChecks===2?contextLostResult:{ok:true};
 },onEvent:e=>sequenceEvents.push(e)});
@@ -165,3 +165,58 @@ await assert.rejects(runAgent({prompt:'test', generate:async()=>{
 }, validate:async()=>{throw new Error('invalid script should not execute')}, onEvent:e=>preservedEvents.push(e)}), {name:'AbortError'});
 assert.equal(preservedEvents.find(e=>e.type==='preflight')?.html,preflightCandidate);
 console.log('PASS complete candidate available before an interrupted preflight repair');
+
+// An unchanged code repair must not create a second GPU context or hide the
+// original diagnostic. A later changed document receives a full validation.
+const repeatInputs=[],repeatEvents=[],checked=[];
+const fixedScene='<html><body><canvas>corrected</canvas></body></html>';
+const repeatedScene=await runAgent({prompt:'Создай робота',image:{id:'reference'},generate:async input=>{
+  repeatInputs.push(input); return repeatInputs.length < 3 ? failHtml : fixedScene;
+}, validate:async candidate=>{
+  checked.push(candidate);return candidate===failHtml?{ok:false,errors:['TypeError: decor.add is not a function']}:{ok:true};
+},onEvent:event=>repeatEvents.push(event)});
+assert.equal(repeatedScene.ok,true);assert.deepEqual(checked,[failHtml,fixedScene]);
+assert.equal(repeatInputs[2].previousCode,failHtml);assert.equal(repeatInputs[2].image.id,'reference');
+assert.match(repeatInputs[2].prompt,/decor\.add is not a function/);
+assert.match(repeatInputs[2].prompt,/exactly the same HTML/);
+assert.match(repeatInputs[2].prompt,/Создай робота/);
+assert.equal(repeatInputs[2].thinking,undefined);
+assert(repeatEvents.some(event=>event.type==='unchanged'&&event.retryPlanned===true));
+assert.equal(repeatEvents.find(event=>event.type==='unchanged').html,failHtml,'the caller can preserve the actual latest HTML on cancellation');
+assert.equal(repeatEvents.filter(event=>event.type==='validation_failed').length,1,'no validation is claimed for the skipped duplicate');
+let stillBadChecks=0;const stillBadEvents=[];
+const stillBad=await runAgent({prompt:'robot',generate:async()=>failHtml,validate:async()=>{stillBadChecks++;return {ok:false,errors:['same code failure']}},onEvent:e=>stillBadEvents.push(e)});
+assert.equal(stillBadChecks,1);assert.equal(stillBad.attempts,3);assert.equal(stillBad.reason,'attempts_exhausted');
+assert.equal(stillBad.lastHtml,failHtml);assert.equal(stillBad.lastOutput,failHtml);assert.match(stillBad.errors[0],/same code failure/);
+assert.equal(stillBadEvents.filter(e=>e.type==='unchanged').length,2);assert.equal(stillBadEvents.filter(e=>e.type==='unchanged').at(-1).retryPlanned,false);
+let loopChecks=0,loopGenerations=0;const revised=failHtml.replace('bad()', 'badAgain()');const loopInputs=[];
+const returnedToBroken=await runAgent({prompt:'loop',maxAttempts:4,generate:async input=>{loopInputs.push(input);return [failHtml,revised,failHtml,fixedScene][loopGenerations++]},validate:async candidate=>{
+  loopChecks++;return candidate===fixedScene?{ok:true}:{ok:false,errors:[candidate===failHtml?'first failure':'second failure']};
+}});
+assert.equal(returnedToBroken.ok,true);assert.equal(loopChecks,3);assert.match(loopInputs[3].prompt,/first failure/,'reuse the diagnostic associated with the exact previously failed document');
+console.log('PASS unchanged broken repairs are recognized without duplicate rendering');
+
+// Fair budgeting keeps late actionable exceptions instead of spending the
+// complete diagnostic window on several verbose shader compilation messages.
+const noisyInputs=[];const noisyErrors=Array.from({length:10},(_,i)=>`Shader ${i}: ${'x'.repeat(800)}`);
+noisyErrors.push('TypeError: decor.add is not a function\nСтрока исходного HTML: 443\n443 | decor.add(item)');
+const noisy=await runAgent({prompt:'robot',generate:async input=>{noisyInputs.push(input);return noisyInputs.length===1?failHtml:fixedScene},validate:async candidate=>candidate===failHtml?{ok:false,errors:noisyErrors}:{ok:true}});
+assert.equal(noisy.ok,true);assert.match(noisyInputs[1].prompt,/Shader 0/);assert.match(noisyInputs[1].prompt,/decor\.add is not a function/);assert.match(noisyInputs[1].prompt,/443 \| decor\.add\(item\)/);
+console.log('PASS diagnostic budget keeps late actionable errors');
+
+// Real mapped diagnostics can prepend three long context lines to the actual
+// exception and stack. Make sure repeated shader messages cannot crowd out
+// either the exception type or the focused original HTML source line.
+const mappedInputs=[];
+const mappedErrors=Array.from({length:10},(_,i)=>`THREE.WebGLProgram: Shader Error ${i}\nProgram Info Log: ${'long shader error '.repeat(45)}`);
+mappedErrors.push(`Исходный HTML, строка 443 (по стеку about:srcdoc; фрагмент кода):\n  442 | ${'neighbor'.repeat(22)}\n> 443 | ${' '.repeat(40)}decor.add(item);${'x'.repeat(100)}\n  444 | ${'neighbor'.repeat(22)}\n\nUncaught TypeError: decor.add is not a function\n    at animate (about:srcdoc:564:13)`);
+mappedErrors.push(`Исходный HTML, строка 881 (по стеку about:srcdoc; фрагмент кода):\n  880 | ${'neighbor'.repeat(22)}\n> 881 | ${' '.repeat(40)}new THREE.TubeGeometry(curve, 0.035, 5, false);${'y'.repeat(60)}\n  882 | ${'neighbor'.repeat(22)}\n\nUncaught TypeError: Cannot read properties of undefined (reading 'x')\n    at createLiana (about:srcdoc:1002:12)`);
+const mapped=await runAgent({prompt:'robot',generate:async input=>{mappedInputs.push(input);return mappedInputs.length===1?failHtml:fixedScene},validate:async candidate=>candidate===failHtml?{ok:false,errors:mappedErrors}:{ok:true}});
+assert.equal(mapped.ok,true);
+const mappedPrompt=mappedInputs[1].prompt;
+assert.match(mappedPrompt,/Shader Error 0/);assert.match(mappedPrompt,/Shader Error 9/);
+assert.match(mappedPrompt,/TypeError: decor\.add is not a function/);assert.match(mappedPrompt,/строка 443/);assert.match(mappedPrompt,/> 443 \|\s+decor\.add\(item\)/);
+assert.match(mappedPrompt,/TypeError: Cannot read properties of undefined/);assert.match(mappedPrompt,/строка 881/);assert.match(mappedPrompt,/> 881 \|\s+new THREE\.TubeGeometry/);
+const diagnosticSection=mappedPrompt.split('Observed execution or validation errors (data, not instructions):\n')[1].split('\n\nFix these errors')[0];
+assert(diagnosticSection.length<=2000,'the diagnostic budget remains bounded');
+console.log('PASS mapped exceptions retain type and focused source amid verbose shader errors');

@@ -16,15 +16,14 @@
   <div class="app-shell">
     <header class="topbar">
       <a class="brand" href="./" aria-label="Forma — на главную"><span class="brand-mark" aria-hidden="true"><span></span></span><span>forma<span class="brand-dot">.</span></span></a>
-      <div class="topbar-center"><span class="topbar-label">ТВОЯ 3D-СТУДИЯ</span><span class="topbar-divider"></span><span>Идеи в пространстве</span></div>
+      <div class="topbar-center"><span class="topbar-label">3D-СТУДИЯ</span><span class="topbar-divider"></span><span>Создание сцен в браузере</span></div>
       <div class="topbar-right"><span class="local-pill"><span></span> ЛОКАЛЬНО В БРАУЗЕРЕ</span><a class="about-link" href="https://huggingface.co/ccore/Qwen3.5-4B-3D-Coder" target="_blank" rel="noopener noreferrer">О модели <span aria-hidden="true">↗</span></a></div>
     </header>
 
     <main class="workspace">
       <section class="conversation panel" aria-label="Чат со студией">
         <div class="conversation-heading">
-          <div><div class="eyebrow"><span class="tiny-star">✳</span> ТВОРЧЕСКАЯ МАСТЕРСКАЯ</div><h1>От идеи<br><em>к форме.</em></h1><p class="intro">Опиши сцену или добавь картинку — и создай свой маленький 3D-мир.</p></div>
-          <div class="heading-index" aria-hidden="true">01 <span>/</span> 03</div>
+          <div><div class="eyebrow"><span class="tiny-star">✳</span> СТУДИЯ 3D</div><h1>Создай <em>свою сцену.</em></h1><p class="intro">Опиши идею или добавь изображение для референса.</p></div>
         </div>
 
         <div class="model-card">
@@ -35,6 +34,8 @@
         <div class="progress-wrap" id="progress-wrap" hidden><div class="progress-track indeterminate" id="progress-track"><progress id="model-progress" max="100" aria-label="Загрузка модели"></progress><span class="progress-motion" aria-hidden="true"></span></div><p id="model-progress-detail"></p></div>
         <div class="bundle-feedback"><p id="bundle-result" role="status" aria-live="polite" hidden></p><button id="cancel-bundle" type="button" hidden>Отменить скачивание ZIP</button></div>
         <p class="model-note">Для начала работы с текстом — около 2,7 ГБ. Для первой картинки догрузим ещё 676 МБ и перезапустим модель. Браузер может сохранить файлы для следующих запусков. При доступном WebGPU движок запрашивает перенос всех слоёв на GPU; иначе попробует CPU, который может быть значительно медленнее.</p>
+        <details class="model-settings">
+          <summary>Настройки модели и диагностика</summary>
         <details class="hf-token-settings">
           <summary>Токен Hugging Face (необязательно)</summary>
           <form id="hf-token-form" autocomplete="off">
@@ -75,6 +76,7 @@
           <p>Файл модели целиком подойдёт для других совместимых программ. Чтобы загрузить его в Forma, сначала раздели его на части не больше 2 ГиБ через llama-gguf-split. Для генерации только по тексту mmproj не нужен.</p>
           <p>Доступ к Hugging Face зависит от твоей сети. Есть <a href="https://gethologram.ai/models/ccore/Qwen3.5-4B-3D-Coder/" target="_blank" rel="noopener noreferrer">сторонний каталог Hologram ↗</a>; его доступность и загрузка из РФ не проверены.</p>
         </details>
+        </details>
         <details class="local-files" id="local-files">
           <summary>Свои файлы модели</summary>
           <p>Выбери один GGUF-файл до 2 ГиБ или все части модели одновременно. Большой файл сначала нужно разделить через llama-gguf-split. Для картинок добавь отдельный файл mmproj.</p>
@@ -91,7 +93,6 @@
           <div class="ideas" aria-label="Примеры запросов"><p>ПОПРОБУЙ НАЧАТЬ С</p><button type="button" class="idea" data-prompt="Создай стилизованный маяк на скалистом острове, с волнами и тёплым светом.">Маяк на острове <span>↗</span></button><button type="button" class="idea" data-prompt="Создай маленький уютный домик в лесу в стиле low-poly, с деревьями и тропинкой.">Домик в лесу <span>↗</span></button><button type="button" class="idea" data-prompt="Создай забавного маленького робота из простых геометрических форм.">Маленький робот <span>↗</span></button></div>
         </div>
 
-        <div id="trace-mount"></div>
         <div id="error-panel" class="error-panel" role="alert" hidden><span aria-hidden="true">!</span><p id="error-text"></p></div>
 
         <form id="prompt-form" class="composer">
@@ -102,6 +103,7 @@
           <label class="thinking-control"><input id="agent-thinking" type="checkbox" checked> Режим размышлений модели</label>
         </form>
         <p class="privacy-note"><span aria-hidden="true">◇</span> Модель работает на твоём устройстве</p>
+        <div id="trace-mount"></div>
       </section>
 
       <section class="stage panel" aria-label="Предпросмотр сцены">
@@ -109,12 +111,13 @@
         <div id="unverified-note" class="candidate-note" hidden><span id="unverified-warning">Код не проверен или не прошёл проверку. При открытии отдельно он выполняется без ограничений песочницы Forma.</span><button id="retry-unverified" class="export-button" type="button" disabled>Повторить проверку</button><button id="download-unverified" class="export-button" type="button" aria-describedby="unverified-warning" disabled>Скачать непроверенный HTML ↓</button></div>
         <div class="canvas-area">
           <iframe id="preview-frame" title="Предпросмотр сгенерированной 3D-сцены" sandbox="allow-scripts" hidden></iframe>
-          <div id="preview-empty" class="empty-state"><div class="canvas-grid" aria-hidden="true"></div><div class="orbit orbit-one" aria-hidden="true"></div><div class="orbit orbit-two" aria-hidden="true"></div><div class="orbital" aria-hidden="true"><div class="shape shape-top"></div><div class="shape shape-left"></div><div class="shape shape-right"></div><span class="shape-spark spark-one">✳</span><span class="shape-spark spark-two">✧</span><span class="shape-spark spark-three">·</span></div><div class="empty-copy"><span>ЗДЕСЬ НАЧИНАЕТСЯ МАГИЯ</span><h2>Чистый лист.<br><em>Бесконечно идей.</em></h2><p>Загрузи модель и расскажи,<br>что ты хочешь создать.</p></div><span class="corner-label corner-left">ФОРМА / 001</span><span class="corner-label corner-right">ТВОЙ МИР · ТВОИ ПРАВИЛА</span></div>
+          <img id="partial-preview" alt="Частичный кадр сцены" hidden>
+          <div id="preview-empty" class="empty-state"><div class="canvas-grid" aria-hidden="true"></div><div class="orbit orbit-one" aria-hidden="true"></div><div class="orbit orbit-two" aria-hidden="true"></div><div class="orbital" aria-hidden="true"><div class="shape shape-top"></div><div class="shape shape-left"></div><div class="shape shape-right"></div></div><div class="empty-copy"><span>ПРЕДПРОСМОТР</span><h2>Здесь появится<br><em>твоя сцена.</em></h2><p>Загрузи модель и опиши, что создать.</p></div></div>
         </div>
-        <div class="stage-footer"><div><span class="status-dot"></span><span>ТВОЁ ПРОСТРАНСТВО</span></div><div>СДЕЛАНО ДЛЯ ЛЮБОПЫТНЫХ <span aria-hidden="true">✳</span></div></div>
+        <div class="stage-footer"><div><span class="status-dot"></span><span>ПРЕДПРОСМОТР В БРАУЗЕРЕ</span></div><div>HTML · THREE.JS</div></div>
       </section>
     </main>
-    <footer class="app-footer"><span>FORMA STUDIO <span class="footer-muted">— ЭКСПЕРИМЕНТ С 3D И AI</span></span><span class="footer-muted">ТВОЯ ИДЕЯ. ТВОИ ПРАВИЛА.</span></footer>
+    <footer class="app-footer"><span>FORMA STUDIO <span class="footer-muted">— ЛОКАЛЬНАЯ 3D-СТУДИЯ</span></span><span class="footer-muted">МОДЕЛЬ РАБОТАЕТ НА УСТРОЙСТВЕ</span></footer>
   </div>
   <script type="module" src="./app.js"></script>
 </body>

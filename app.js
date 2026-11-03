@@ -9,7 +9,7 @@ import { createTracePanel } from './trace-panel.js';
 import { createProfiler } from './profiling-ui.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','preview-status','error-panel','error-text','download-html','download-unverified','retry-unverified','unverified-note','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
+const ui = Object.fromEntries(['load-model','open-local','local-files','hf-token','model-status','model-progress','progress-wrap','progress-track','model-progress-detail','chat-log','prompt-form','prompt-input','image-input','image-chip','image-preview','image-name','remove-image','generate-button','stop-agent','agent-thinking','trace-mount','preview-frame','preview-empty','partial-preview','preview-status','error-panel','error-text','download-html','download-unverified','retry-unverified','unverified-note','copy-html','reset-scene','model-files','projector-file','load-local','check-connectivity','connectivity-result','download-bundle','cancel-bundle','bundle-result','download-files'].map(id => [id, $(id)]));
 // The token is never stored by the app; discard any value restored by the browser.
 ui['hf-token'].value = '';
 // The form is present for browser password-field semantics, not submission.
@@ -90,8 +90,14 @@ ui['stop-agent'].addEventListener('click', () => {
   ui['stop-agent'].textContent = 'Останавливаю…';
   trace.stage('Остановка запрошена', 'Если компонент модели ещё загружается, остановка произойдёт после текущего этапа.');
 });
+function openDetailsAncestors(element) {
+  for (let parent = element?.parentElement; parent; parent = parent.parentElement) {
+    if (parent.tagName?.toLowerCase() === 'details') parent.open = true;
+  }
+}
 ui['open-local'].addEventListener('click', () => {
   if (busy) return;
+  openDetailsAncestors(ui['local-files']);
   ui['local-files'].open = true;
   ui['open-local'].setAttribute('aria-expanded', 'true');
   ui['model-files'].focus();
@@ -167,6 +173,7 @@ ui['download-bundle'].addEventListener('click', async () => {
   error('');
   ui['bundle-result'].hidden = true;
   if (typeof window.showSaveFilePicker !== 'function') {
+    openDetailsAncestors(ui['download-files']);
     ui['download-files'].open = true;
     error('Этот браузер не поддерживает сохранение большого ZIP напрямую. Попробуй актуальный Chrome или Edge; ниже доступны отдельные файлы.');
     return;
@@ -315,6 +322,40 @@ async function restorePreviousScene() {
     await discardCandidate(selected.frame);
   }
 }
+function clearPartialPreview() {
+  ui['partial-preview'].hidden = true;
+  ui['partial-preview'].removeAttribute('src');
+}
+
+// A failed scene can sometimes draw a frame before reporting an error. Re-run
+// it once only when the last check observed a live WebGL draw. The screenshot
+// is local, is not sent to a vision model, and never becomes an accepted scene.
+async function showPartialPreview(html, previousEvidence, signal) {
+  if (scene || !html || signal?.aborted || !previousEvidence?.drawObservationAvailable ||
+      !(previousEvidence.visibleCanvasCount > 0 && previousEvidence.webglContexts > 0 && previousEvidence.drawCalls > 0)) return false;
+  let frame = null;
+  try {
+    await pauseModel();
+    if (signal?.aborted || scene) return false;
+    frame = createCandidate();
+    const result = await validateScene({iframe:frame, html, signal, captureImage:true, settleMs:1500, timeoutMs:8000});
+    const e = result?.evidence;
+    if (signal?.aborted || scene || !e?.drawObservationAvailable ||
+        !(e.visibleCanvasCount > 0 && e.webglContexts > 0 && e.drawCalls > 0) ||
+        typeof result.screenshot !== 'string' || !result.screenshot.startsWith('data:image/jpeg;base64,')) return false;
+    ui['partial-preview'].src = result.screenshot;
+    ui['partial-preview'].hidden = false;
+    ui['preview-empty'].hidden = true;
+    ui['preview-status'].textContent = 'Частичный кадр · сцена не прошла проверку';
+    trace.stage('Частичный кадр', 'Показан статичный кадр; проверка сцены не пройдена и визуальное качество не подтверждено.');
+    return true;
+  } catch (err) {
+    if (err?.name !== 'AbortError') trace.stage('Частичный кадр недоступен', 'Не удалось получить кадр из последнего варианта сцены.');
+    return false;
+  } finally {
+    await discardCandidate(frame);
+  }
+}
 function adoptCandidate(frame, html) {
   const old = ui['preview-frame'];
   disposeScene(old);
@@ -326,6 +367,7 @@ function adoptCandidate(frame, html) {
   frame.style.opacity = '1';
   frame.style.pointerEvents = '';
   ui['preview-frame'] = frame;
+  clearPartialPreview();
   ui['preview-empty'].hidden = true;
   scene = html;
   ui['preview-status'].textContent = 'Проверен запуск сцены';
@@ -335,7 +377,20 @@ function agentEvents(status, context, session) {
     if (event.type === 'generating') { context.attempt = event.attempt; context.maxAttempts = event.maxAttempts; }
     // Save the complete document before static checking. If that check fails
     // and a later repair is cancelled, the previous candidate is still useful.
-    if (event.type === 'preflight') retainUnverified(event.html, session);
+    if (event.type === 'preflight' || event.type === 'unchanged') {
+      if (!scene) {
+        clearPartialPreview();
+        ui['preview-empty'].hidden = false;
+      }
+      retainUnverified(event.html, session);
+      context.fallbackHtml = event.html;
+      context.fallbackEvidence = context.fallbackHistory?.get(event.html) || null;
+    }
+    if (event.type === 'validation_failed' && event.evidence && context.fallbackHtml) {
+      context.fallbackHistory ||= new Map();
+      context.fallbackHistory.set(context.fallbackHtml, event.evidence);
+      context.fallbackEvidence = event.evidence;
+    }
     trace.event(event);
     const attempt = `${event.attempt}/${event.maxAttempts}`;
     if (event.type === 'generating') status.textContent = `Создаю сцену · попытка ${attempt}…`;
@@ -620,7 +675,9 @@ ui['prompt-form'].addEventListener('submit', async event => {
   trace.begin({preserve:true});
   trace.stage('Запрос пользователя', prompt);
   const status = appendMessage('FORMA · СОЗДАЮ', 'Готовлю сцену…');
-  ui['preview-status'].textContent = 'Генерирую сцену…';
+  ui['preview-status'].textContent = !ui['partial-preview'].hidden
+    ? 'Генерирую сцену · показан предыдущий частичный кадр'
+    : 'Генерирую сцену…';
   const session = {prompt, reference:image, frame:null, pendingError:null, lateRepairStarted:false, scheduled:false};
   const selected = {frame:null};
   const traceContext = {attempt:0, maxAttempts:3};
@@ -694,6 +751,9 @@ ui['prompt-form'].addEventListener('submit', async event => {
     }
     if (e?.name !== 'AbortError') error(e?.message || String(e));
     if (e?.name !== 'AbortError') trace.stage('Не удалось завершить', e?.message || String(e));
+    if (e?.name !== 'AbortError' && !scene && traceContext.fallbackHtml === unverifiedHtml) {
+      await showPartialPreview(unverifiedHtml, traceContext.fallbackEvidence, agentController?.signal);
+    }
     trace.finish(e?.name === 'AbortError' ? 'Остановлено' : 'Ошибка', e?.name === 'AbortError' ? 'done' : 'error');
   } finally {
     await discardCandidate(selected.frame);
@@ -726,6 +786,8 @@ ui['retry-unverified'].addEventListener('click', async () => {
   const session = {prompt:unverifiedContext?.prompt || '', reference:unverifiedContext?.reference || null, frame:null, pendingError:null, lateRepairStarted:false, scheduled:false};
   const selected = {frame:null};
   const previousSession = activeScene;
+  let firstEvidence = null;
+  let retryContext = null;
   error('');
   setBusy(true);
   trace.begin({preserve:true});
@@ -741,6 +803,7 @@ ui['retry-unverified'].addEventListener('click', async () => {
     if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
     ui['preview-status'].textContent = 'Повторно проверяю сцену…';
     let validation = await agentValidator({status, session, selected, retainOnFailure:false})(html, {signal});
+    if (!validation.ok) firstEvidence = validation.evidence || null;
     if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
     let acceptedHtml = html;
     if (!validation.ok) {
@@ -771,6 +834,7 @@ ui['retry-unverified'].addEventListener('click', async () => {
       if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
       const maxAttempts = validation.contextLost === true ? 1 : 2;
       const traceContext = {attempt:0, maxAttempts};
+      retryContext = traceContext;
       const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:html, initialErrors:validation.errors,
         generate:agentGenerate(traceContext), validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext,session), signal, maxAttempts});
       if (!result.ok && result.lastHtml) retainUnverified(result.lastHtml, session);
@@ -799,6 +863,12 @@ ui['retry-unverified'].addEventListener('click', async () => {
     status.textContent = cancelled ? 'Проверка остановлена; HTML сохранён.' : 'Сцена не прошла повторную проверку; HTML сохранён.';
     ui['preview-status'].textContent = scene ? 'Предыдущая сцена сохранена' : 'Сцена пока не создана';
     if (!cancelled) { error(err?.message || String(err)); trace.stage('Повторная проверка не прошла', err?.message || String(err)); }
+    if (!cancelled && !scene) {
+      const candidateEvidence = retryContext?.fallbackHtml === unverifiedHtml
+        ? retryContext.fallbackEvidence
+        : unverifiedHtml === html ? firstEvidence : null;
+      await showPartialPreview(unverifiedHtml, candidateEvidence, signal);
+    }
     trace.finish(cancelled ? 'Остановлено' : 'Ошибка', cancelled ? 'done' : 'error');
   } finally {
     await discardCandidate(selected.frame);
@@ -814,7 +884,7 @@ ui['reset-scene'].addEventListener('click', async () => {
   try {
     await releaseScene(ui['preview-frame']);
     activeScene = null;
-    scene = ''; clearUnverified(); ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
+    scene = ''; clearUnverified(); clearPartialPreview(); ui['preview-frame'].srcdoc = ''; ui['preview-frame'].hidden = true; ui['preview-empty'].hidden = false;
     ui['preview-status'].textContent = 'Твоя сцена появится здесь'; ui['download-html'].disabled = true; ui['copy-html'].disabled = true; error('');
   } finally { setBusy(false); }
 });

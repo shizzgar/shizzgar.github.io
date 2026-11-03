@@ -57,3 +57,108 @@
 .chrome-linux-guide code{color:#e1f7bc;overflow-wrap:anywhere}
 .chrome-linux-guide pre{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:7px 0;padding:8px;border:1px solid #3b4935;border-radius:5px;background:#171d16;font-size:10px;line-height:1.5;user-select:all}
 .chrome-linux-guide a{color:#d2eca8}
+
+/* Studio layout: keep the prompt and model state visible while the work log
+   expands below them; give the preview room without hiding controls. */
+:root{--bg:#111411;--panel:#181d19;--panel2:#202720;--line:#354035;--muted:#aebaaa;--text:#eff4eb;--lime:#c6e98b}
+body{background:#111411}
+.app-shell{max-width:1700px;padding:0 2.5%}
+.topbar{height:64px;gap:24px;border-color:#303930}
+.brand{font-size:23px;letter-spacing:-.06em}
+.brand-mark{width:28px;height:28px;border-radius:7px;transform:none}
+.topbar-center{color:#abb8a8;font-size:13px}
+.topbar-label,.local-pill{font-size:11px;letter-spacing:.08em}
+.topbar-right{gap:18px}
+.local-pill span,.status-dot{box-shadow:none}
+.workspace{grid-template-columns:minmax(410px,.85fr) minmax(0,1.4fr);gap:16px;padding-top:16px;min-height:0;align-items:start}
+.panel{border-color:#354035;border-radius:12px}
+.conversation{min-height:0;padding:22px 24px 20px;background:#1a201b}
+.conversation-heading{gap:12px}
+.eyebrow{font-size:11px;letter-spacing:.1em;color:#bbcfad}
+.tiny-star{font-size:14px}
+.conversation h1{font-size:clamp(28px,2.6vw,36px);line-height:1.12;letter-spacing:-.045em;margin:10px 0 8px}
+.intro{font-size:14px;line-height:1.5;max-width:100%;color:#b8c4b5}
+.model-card{margin-top:18px;padding:12px;background:#222b22;gap:10px}
+.model-copy strong{font-size:14px}
+.model-copy span{font-size:12px;color:#bbc9b6;white-space:normal;overflow:visible}
+.model-actions{flex:1 0 100%;margin:0;gap:8px}
+.model-actions button{min-height:40px;padding:9px 12px;font-size:12px}
+.model-note{font-size:12px;line-height:1.5;color:#abb8a8;margin:10px 2px 0}
+.model-settings,.local-files{margin:12px 0 0;font-size:13px;color:#cfddc8}
+.model-settings>summary,.local-files>summary{min-height:40px;display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid #374638;border-radius:7px;cursor:pointer;font-weight:700;list-style:none}
+.model-settings>summary::-webkit-details-marker,.local-files>summary::-webkit-details-marker{display:none}
+.model-settings>summary:before,.local-files>summary:before{content:'+';font-size:17px;color:#c6e98b;line-height:1}
+.model-settings[open]>summary:before,.local-files[open]>summary:before{content:'−'}
+.model-settings[open]>summary,.local-files[open]>summary{background:#242d23}
+.model-settings>details,.model-settings>.connection-check{margin:12px 4px}
+.hf-token-settings,.download-files,.chrome-linux-guide{font-size:12px;line-height:1.55}
+.hf-token-settings summary,.download-files summary,.chrome-linux-guide summary{min-height:32px;padding:6px 0}
+.connection-check{display:flex;flex-wrap:wrap;gap:8px}
+.connection-check button,.local-files button{min-height:40px;font-size:12px;padding:8px 12px}
+.connection-check p{width:100%;font-size:12px}
+.local-files p,.local-files label,.local-files input,.download-files p,.hf-token-settings p,.chrome-linux-guide p{font-size:12px;line-height:1.55}
+.local-files input::file-selector-button{min-height:36px;font-size:12px}
+.download-actions a{font-size:12px;min-height:40px}
+.chat-zone{flex:1 1 auto;min-height:112px;max-height:260px;padding:18px 0;overscroll-behavior:contain}
+.welcome-message p{font-size:14px;line-height:1.55;max-width:none;color:#d2dcd0}
+.message-label,.ideas>p{font-size:11px;letter-spacing:.08em}
+.ideas{margin-top:16px;gap:8px}
+.idea{font-size:12px;min-height:36px;padding:8px 10px}
+.composer{padding:12px;background:#202820;border-color:#4a5b48}
+.composer textarea{font-size:14px;min-height:64px;line-height:1.5}
+.attach-button,.send-button,.stop-agent-button{min-height:40px;font-size:12px;padding:10px 12px}
+.attachment-hint,.thinking-control,.privacy-note{font-size:12px}
+.privacy-note{justify-content:flex-start;margin:10px 0 0;color:#a7b8a1}
+.error-panel{font-size:13px;line-height:1.5;padding:12px}
+.stage{min-height:520px;height:calc(100vh - 96px);position:sticky;top:16px;background:#1c241c}
+.stage-header{height:auto;min-height:68px;padding:12px 20px;gap:12px;flex-wrap:wrap}
+.stage-title strong{font-size:14px}
+.stage-title div span{font-size:12px;line-height:1.35;color:#aebdaa}
+.icon-button,.export-button{height:40px;font-size:12px}
+.icon-button{width:40px}
+.canvas-area{min-height:350px;background:#20291f}
+.canvas-area iframe{background:#20291f}
+.canvas-area #partial-preview{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#161d17;z-index:1}
+.empty-state{background:radial-gradient(ellipse at 50% 42%,#344530 0,#252f24 45%,#1d271d 100%)}
+.empty-state:after{background:linear-gradient(180deg,rgba(12,19,10,.08),transparent 45%,rgba(12,19,10,.16))}
+.canvas-grid{opacity:.12}
+.orbit{border-color:#9ab78a35}
+.orbit-two{border-color:#9ab78a1c}
+.orbital{transform:scale(.8);margin-top:-45px;filter:drop-shadow(0 18px 20px #10160d66)}
+.empty-copy>span{font-size:11px;letter-spacing:.12em;color:#c1d4b8}
+.empty-copy h2{font-size:clamp(27px,2.4vw,38px);line-height:1.16;margin:12px 0}
+.empty-copy p{font-size:14px;color:#c0cfbd}
+.stage-footer{min-height:44px;height:auto;padding:12px 20px;font-size:10px;letter-spacing:.08em;color:#a4b6a0}
+.app-footer{height:auto;min-height:48px;font-size:10px;letter-spacing:.08em}
+.candidate-note{font-size:13px;line-height:1.5}
+.candidate-note .export-button{min-height:40px}
+.model-settings summary:focus-visible,.local-files summary:focus-visible,.chrome-linux-guide summary:focus-visible,.download-files summary:focus-visible,.hf-token-settings summary:focus-visible{outline:2px solid var(--lime);outline-offset:3px}
+@media(max-width:1000px){
+  .workspace{grid-template-columns:1fr}
+  .conversation{min-height:0}
+  .chat-zone{min-height:112px}
+  .stage{position:relative;top:auto;height:auto;min-height:560px}
+  .canvas-area{min-height:440px}
+}
+@media(max-width:500px){
+  .app-shell{padding:0 12px}
+  .topbar{height:60px;gap:8px}
+  .topbar-right{gap:8px}
+  .local-pill{font-size:10px;letter-spacing:.02em}
+  .workspace{padding-top:12px;gap:12px}
+  .conversation{padding:18px 16px 16px}
+  .conversation h1{font-size:30px;margin:8px 0}
+  .model-card{margin-top:16px}
+  .model-actions button{flex:1 1 auto}
+  .chat-zone{min-height:110px}
+  .stage{min-height:500px}
+  .stage-header{padding:12px;align-items:flex-start}
+  .stage-title{min-width:0;flex:1 1 100%}
+  .stage-title div span{max-width:none;white-space:normal;overflow:visible}
+  .stage-actions{width:100%;gap:6px}
+  .export-button{padding:0 10px}
+  .canvas-area{min-height:360px}
+  .stage-footer{padding:10px 12px}
+  .stage-footer div:last-child{font-size:10px}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}

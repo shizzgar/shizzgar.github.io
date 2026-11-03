@@ -35,7 +35,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
   if (!mount || typeof mount.append !== 'function') throw new TypeError('Не найден контейнер трассы.');
   const mask = value => String(redact(String(value ?? '')) ?? '').slice(0, 3000);
   const root = element('details', 'trace-panel');
-  root.open = true;
+  root.open = false;
   const summary = element('summary', 'trace-summary');
   const summaryName = element('span', 'trace-title', '✳  Работа агента');
   const badge = element('span', 'trace-badge', 'ОЖИДАНИЕ');
@@ -52,8 +52,8 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
   const empty = element('p', 'trace-empty', 'После запуска здесь появятся действия и ответы агента.');
   feed.append(empty);
   const machine = element('details', 'trace-machine');
-  // The browser profile is useful before downloading multi-gigabyte weights.
-  machine.open = true;
+  // Device details remain available without crowding the main conversation.
+  machine.open = false;
   const machineSummary = element('summary', '', 'Устройство и параметры');
   const machineContent = element('dl', 'trace-machine-grid');
   machine.append(machineSummary, machineContent);
@@ -184,7 +184,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
     if (e.type === 'token' || e.type === 'reasoning') { addChunk(e); return; }
     const attempt = Number.isFinite(e.attempt) ? e.attempt : 0;
     const suffix = attempt ? ` · попытка ${attempt}${e.maxAttempts ? `/${e.maxAttempts}` : ''}` : '';
-    if (['generating', 'preflight', 'validating', 'validation_failed', 'context_loss_repair', 'repairing', 'success', 'failed'].includes(e.type)) flushStreams();
+    if (['generating', 'preflight', 'validating', 'validation_failed', 'unchanged', 'context_loss_repair', 'repairing', 'success', 'failed'].includes(e.type)) flushStreams();
     switch (e.type) {
       case 'generating':
         // TTFT is per generation, including prefill; do not include validation.
@@ -193,6 +193,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => ''} 
       case 'preflight': tick(`Предварительная проверка${suffix}`, 'Проверяю структуру документа и синтаксис обычных скриптов; для проверки отрисовки нужен запуск.'); break;
       case 'validating': tick(`Проверка запуска${suffix}`, 'Запускаю код и отслеживаю ошибки.'); break;
       case 'validation_failed': tick(`Ошибка проверки${suffix}`, Array.isArray(e.errors) ? e.errors.join('\n') : e.errors, 'error'); break;
+      case 'unchanged': tick(`Код не изменился${suffix}`, e.retryPlanned ? 'Повторный запуск пропущен; передаю модели предыдущую ошибку и прошу изменить код.' : 'Повторный запуск пропущен; лимит попыток исчерпан.', 'error'); break;
       case 'context_loss_repair': tick('Потерян WebGL-контекст', 'Причина неизвестна; попробую один раз исправить и запустить сцену заново.'); break;
       case 'repairing': tick('Исправление', 'Передаю найденные ошибки модели.'); break;
       case 'success': tick('Проверка пройдена', 'Ошибок выполнения за время проверки не обнаружено.', 'success'); break;

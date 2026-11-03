@@ -23,13 +23,17 @@ function bridge(nonce, settleMs, captureImage) {
   const send = (type, payload) => parent.postMessage({channel:'forma-runner-v1', nonce, type, payload}, '*');
   const errors = [];
   let releasing = false;
-  const report = (message, kind = 'script', source = '') => {
+  const report = (message, kind = 'script', source = '', location = null) => {
     try {
       if (releasing) return;
-      // Keep the report bounded, but never let a burst of shader errors hide
-      // the first context-loss signal needed for resource recovery.
-      if (errors.length >= ${MAX_ERRORS} && (kind !== 'webgl-context-lost' || errors.some(item => item.kind === 'webgl-context-lost'))) return;
       const item = {message:String(message || 'Неизвестная ошибка').slice(0,900), kind, source:String(source || '').slice(0,500)};
+      if (location && Number.isSafeInteger(location.line) && location.line > 0) item.line = location.line;
+      if (location && Number.isSafeInteger(location.column) && location.column > 0) item.column = location.column;
+      if (errors.some(value => value.kind === item.kind && value.source === item.source && value.message === item.message && value.line === item.line && value.column === item.column)) return;
+      // Keep the report bounded, but never let a burst of shader errors hide
+      // the first context-loss signal or the following JavaScript exception.
+      if (kind === 'console' && errors.length >= ${MAX_ERRORS - 2}) return;
+      if (errors.length >= ${MAX_ERRORS} && (kind !== 'webgl-context-lost' || errors.some(item => item.kind === 'webgl-context-lost'))) return;
       errors.push(item);
       send('error', item);
     } catch (_) {}
@@ -40,7 +44,7 @@ function bridge(nonce, settleMs, captureImage) {
       report('Не удалось загрузить ресурс: ' + (target.src || target.href), 'resource', target.src || target.href);
     } else {
       const e = event.error;
-      report((event.message || e?.message || 'Ошибка выполнения') + (e?.stack ? '\\n' + e.stack : ''), 'script', event.filename || '');
+      report((event.message || e?.message || 'Ошибка выполнения') + (e?.stack ? '\\n' + e.stack : ''), 'script', event.filename || '', {line:event.lineno, column:event.colno});
     }
   }, true);
   addEventListener('unhandledrejection', event => {
@@ -151,6 +155,62 @@ export function makeSandboxDocument(html, nonce, settleMs = 2000, captureImage =
   return '<!doctype html>' + prefix + html.replace(/^\s*<!doctype\s+html[^>]*>/i, '');
 }
 
+// The runner prepends an inline bridge and may remove an existing doctype.
+// Browser srcdoc stacks therefore refer to a different document from the
+// one the model generated. Compute offsets from these exact two documents,
+// rather than depending on the current length of the bridge.
+function describeOriginalLocation(html, srcdoc, item) {
+  if (item.kind === 'resource') return '';
+  const match = /^\s*<!doctype\s+html[^>]*>/i.exec(html);
+  const removed = match ? match[0] : '';
+  const body = html.slice(removed.length);
+  if (!body || !srcdoc.endsWith(body)) return '';
+  const prefix = srcdoc.slice(0, srcdoc.length - body.length);
+  const normalize = value => value.replace(/\r\n?/g, '\n');
+  const prefixNormalized = normalize(prefix);
+  const removedNormalized = normalize(removed);
+  const sourceLines = normalize(html).split('\n');
+  const countLines = value => (value.match(/\n/g) || []).length;
+  const insertedLines = countLines(prefixNormalized);
+  const removedLines = countLines(removedNormalized);
+  const locations = [];
+  if (item.source === 'about:srcdoc' && Number.isSafeInteger(item.line) && item.line > 0) {
+    locations.push({line:item.line, column:item.column});
+  }
+  for (const location of item.message.matchAll(/\babout:srcdoc:(\d+)(?::(\d+))?/g)) {
+    locations.push({line:Number(location[1]), column:location[2] ? Number(location[2]) : null});
+  }
+  const firstBodyLine = insertedLines + 1;
+  for (const location of locations) {
+    if (!Number.isSafeInteger(location.line) || location.line < firstBodyLine) continue;
+    if (location.column != null && (!Number.isSafeInteger(location.column) || location.column <= 0)) continue;
+    // The final bridge line and the start of the generated HTML can share a
+    // line. Without a column we cannot tell which side produced the error.
+    let sourceColumn = location.column;
+    if (location.line === firstBodyLine) {
+      const boundary = prefixNormalized.length - prefixNormalized.lastIndexOf('\n') - 1;
+      if (location.column == null || location.column <= boundary) continue;
+      const removedTail = removedNormalized.length - removedNormalized.lastIndexOf('\n') - 1;
+      sourceColumn = location.column - boundary + removedTail;
+    }
+    const sourceLine = location.line - insertedLines + removedLines;
+    if (!Number.isSafeInteger(sourceLine) || sourceLine < 1 || sourceLine > sourceLines.length) continue;
+    const lines = [];
+    for (let i = Math.max(1, sourceLine - 1); i <= Math.min(sourceLines.length, sourceLine + 1); i++) {
+      const text = sourceLines[i - 1];
+      let excerpt = text;
+      if (text.length > 180) {
+        const focus = i === sourceLine && Number.isSafeInteger(sourceColumn) && sourceColumn > 0 && sourceColumn <= text.length + 1 ? sourceColumn - 1 : 0;
+        const start = Math.max(0, Math.min(text.length - 180, focus - 60));
+        excerpt = (start ? '…' : '') + text.slice(start, start + 180) + (start + 180 < text.length ? '…' : '');
+      }
+      lines.push(`${i === sourceLine ? '>' : ' '} ${i} | ${excerpt}`);
+    }
+    return `Исходный HTML, строка ${sourceLine} (по стеку about:srcdoc; фрагмент кода):\n${lines.join('\n')}`;
+  }
+  return '';
+}
+
 /** Stop listening to a previous scene without reloading it. */
 export function disposeScene(iframe) {
   const dispose = sessions.get(iframe);
@@ -257,12 +317,18 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
     };
     const appendError = item => {
       if (!item || typeof item.message !== 'string') return;
-      if (observed.length >= MAX_ERRORS && (item.kind !== 'webgl-context-lost' || observed.some(value => value.kind === 'webgl-context-lost'))) return;
       const value = {
         message: item.message.slice(0,900),
         kind: typeof item.kind === 'string' ? item.kind.slice(0,40) : 'script',
         source: typeof item.source === 'string' ? item.source.slice(0,500) : '',
       };
+      if (Number.isSafeInteger(item.line) && item.line > 0) value.line = item.line;
+      if (Number.isSafeInteger(item.column) && item.column > 0) value.column = item.column;
+      const originalLocation = describeOriginalLocation(html, srcdoc, value);
+      if (originalLocation) value.message = `${originalLocation}\n\n${value.message}`;
+      if (observed.some(previous => previous.kind === value.kind && previous.source === value.source && previous.message === value.message)) return;
+      if (value.kind === 'console' && observed.length >= MAX_ERRORS - 2) return;
+      if (observed.length >= MAX_ERRORS && (value.kind !== 'webgl-context-lost' || observed.some(previous => previous.kind === 'webgl-context-lost'))) return;
       observed.push(value);
       if (ended) { try { onRuntimeError(value); } catch (_) {} }
     };

@@ -89,5 +89,5 @@ const saturated = await run([
 ]);
 assert.equal(saturated.contextLost, true, 'a burst of earlier errors must not hide context loss');
 assert.equal(saturated.retryable, false);
-assert.equal(saturated.errors.length, 13, 'reports remain bounded with one reserved loss signal');
+assert.equal(saturated.errors.length, 11, 'console burst leaves space for script errors and a separate loss signal');
 console.log('PASS distinguishes lost WebGL context from no active context without changing retry policy');
