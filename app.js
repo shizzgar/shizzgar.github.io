@@ -718,8 +718,8 @@ ui['image-input'].addEventListener('change', event => {
 });
 ui['remove-image'].addEventListener('click', clearImage);
 document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => { ui['prompt-input'].value = button.dataset.prompt; ui['prompt-input'].focus(); }));
-// Re-run the saved candidate without generating it again. The same sandbox,
-// GPU resource handoff, and execution checks are used as for a new scene.
+// Re-run the saved candidate without generating it again; when a code error is
+// observed, use the usual bounded repair loop with its original request.
 ui['retry-unverified'].addEventListener('click', async () => {
   if (busy || !unverifiedHtml) return;
   const html = unverifiedHtml;
@@ -740,10 +740,46 @@ ui['retry-unverified'].addEventListener('click', async () => {
     await parkScene();
     if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
     ui['preview-status'].textContent = 'Повторно проверяю сцену…';
-    const validation = await agentValidator({status, session, selected, retainOnFailure:false})(html, {signal});
+    let validation = await agentValidator({status, session, selected, retainOnFailure:false})(html, {signal});
     if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
-    if (!validation.ok || !selected.frame) throw new Error((validation.errors || []).join('; ') || 'Сцена не прошла проверку запуска.');
-    adoptCandidate(selected.frame, html);
+    let acceptedHtml = html;
+    if (!validation.ok) {
+      const canRepair = validation.contextLost === true
+        ? validation.infrastructureErrorOther === false
+        : validation.retryable !== false;
+      if (!canRepair) throw new Error((validation.errors || []).join('; ') || 'Сцена не прошла проверку запуска.');
+      const modelState = getModelState();
+      if (!modelState.loaded && !modelState.suspended) throw new Error('Для исправления сцены сначала загрузи модель. HTML сохранён.');
+      if (!session.prompt.trim()) throw new Error('Исходный запрос для исправления недоступен. HTML сохранён.');
+      if (session.reference && !modelState.vision && modelState.mode === 'local' && !ui['projector-file'].files?.[0]) {
+        throw new Error('Для исправления с изображением выбери компонент mmproj. HTML сохранён.');
+      }
+      status.textContent = 'Проверка обнаружила ошибки. Восстанавливаю модель для исправления…';
+      trace.stage('Исправление', 'Проверка нашла ошибки; передаю их модели вместе с сохранённым HTML.');
+      await activateModel(signal);
+      if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+      if (session.reference && !getModelState().vision) {
+        if (getModelState().mode === 'local') await setLocalProjector(ui['projector-file'].files[0]);
+        const call = trace.toolStart('Подключение vision', {источник:getModelState().mode === 'local' ? 'локальный файл' : 'Hugging Face'});
+        try {
+          await ensureVision({onStatus:text => {startStage(text); trace.stage(text);}, onProgress:updateProgress, token:ui['hf-token'].value.trim()});
+          profiler.invalidate();
+          trace.toolFinish(call, {output:'Компонент для картинок подключён.'});
+        } catch (err) { trace.toolFinish(call, {error:err}); throw err; }
+        finally { finishProgress(); }
+      }
+      if (signal.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+      const maxAttempts = validation.contextLost === true ? 1 : 2;
+      const traceContext = {attempt:0, maxAttempts};
+      const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:html, initialErrors:validation.errors,
+        generate:agentGenerate(traceContext), validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext,session), signal, maxAttempts});
+      if (!result.ok && result.lastHtml) retainUnverified(result.lastHtml, session);
+      if (!result.ok) throw new Error((result.errors || []).join('; ') || 'Не удалось исправить сцену. HTML сохранён.');
+      acceptedHtml = result.html;
+      validation = result.validation;
+    }
+    if (!selected.frame) throw new Error('Проверенная сцена недоступна для предпросмотра.');
+    adoptCandidate(selected.frame, acceptedHtml);
     session.frame = selected.frame;
     session.parked = false;
     selected.frame = null;
