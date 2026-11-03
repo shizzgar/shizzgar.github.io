@@ -1,15 +1,15 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js?v=20261103-workspace-3';
-import { checkConnectivity, checkWebGPU } from './diagnostics.js?v=20261103-workspace-3';
-import { probeInferenceWebGPU } from './webgpu-inference-probe.js?v=20261103-workspace-3';
-import { createBundle } from './bundle-download.js?v=20261103-workspace-3';
-import { runAgent } from './agent-loop.js?v=20261103-workspace-3';
-import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js?v=20261103-workspace-3';
-import { probeWebGLRecovery } from './webgl-recovery.js?v=20261103-workspace-3';
-import { createTracePanel } from './trace-panel.js?v=20261103-workspace-3';
-import { createProfiler } from './profiling-ui.js?v=20261103-workspace-3';
-import { getLanguage, getLanguageMode, setLanguage, onLanguageChange, registerMessages, applyTranslations } from './i18n.js?v=20261103-workspace-3';
-import { uiMessages } from './ui-messages.js?v=20261103-workspace-3';
-import { translateShell, createShellTextManager } from './app-language.js?v=20261103-workspace-3';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js?v=20261103-runtime-4';
+import { checkConnectivity, checkWebGPU } from './diagnostics.js?v=20261103-runtime-4';
+import { probeInferenceWebGPU } from './webgpu-inference-probe.js?v=20261103-runtime-4';
+import { createBundle } from './bundle-download.js?v=20261103-runtime-4';
+import { runAgent } from './agent-loop.js?v=20261103-runtime-4';
+import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js?v=20261103-runtime-4';
+import { probeWebGLRecovery } from './webgl-recovery.js?v=20261103-runtime-4';
+import { createTracePanel } from './trace-panel.js?v=20261103-runtime-4';
+import { createProfiler } from './profiling-ui.js?v=20261103-runtime-4';
+import { getLanguage, getLanguageMode, setLanguage, onLanguageChange, registerMessages, applyTranslations } from './i18n.js?v=20261103-runtime-4';
+import { uiMessages } from './ui-messages.js?v=20261103-runtime-4';
+import { translateShell, createShellTextManager } from './app-language.js?v=20261103-runtime-4';
 
 registerMessages(uiMessages);
 applyTranslations();
@@ -557,13 +557,7 @@ function agentGenerate(context) {
   };
 }
 function agentValidator({status, session, selected, retainOnFailure = true}) {
-  return async (html, {signal}) => {
-    // Preserve the complete candidate even when validation is interrupted or
-    // a later repair fails; restoring an accepted scene must not overwrite it.
-    if (retainOnFailure) retainUnverified(html, session);
-    if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
-    await pauseModel();
-    if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+  const runCandidate = async (html, signal) => {
     const frame = createCandidate();
     const lateIssues = [];
     let contextLost = false;
@@ -619,9 +613,11 @@ function agentValidator({status, session, selected, retainOnFailure = true}) {
           }
         }
       }
-      trace.toolFinish(run, validation.ok
-        ? {output:{evidence:validation.evidence, warnings:validation.warnings}}
-        : {error:(validation.errors || []).join('\n') || 'Проверка не прошла'});
+      trace.toolFinish(run, {
+        output:{evidence:validation.evidence, warnings:validation.warnings, diagnostics:validation.diagnostics,
+          phase:validation.phase, infrastructureFailure:validation.infrastructureFailure},
+        ...(validation.ok ? {} : {error:(validation.errors || []).join('\n') || 'Проверка не прошла'}),
+      });
       runFinished = true;
       if (validation.ok) selected.frame = frame;
       return validation;
@@ -629,6 +625,33 @@ function agentValidator({status, session, selected, retainOnFailure = true}) {
       if (!runFinished) trace.toolFinish(run, {error:err});
       await discardCandidate(frame);
       throw err;
+    }
+  };
+  return async (html, {signal} = {}) => {
+    // Preserve the complete candidate even when validation is interrupted or
+    // a later repair fails; restoring an accepted scene must not overwrite it.
+    if (retainOnFailure) retainUnverified(html, session);
+    if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+    await pauseModel();
+    if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+    for (let runtimeAttempt = 0; runtimeAttempt < 2; runtimeAttempt++) {
+      if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+      const validation = await runCandidate(html, signal);
+      // A library download or an unstarted document is not a reason to ask the
+      // model to rewrite valid HTML. Only explicit sandbox classifications get
+      // this one retry; WebGL creation and loss use the recovery path above.
+      const canRetryRuntime = !validation.ok && !validation.contextLost &&
+        ['module-load', 'resource', 'startup-timeout'].includes(validation.infrastructureFailure);
+      if (!canRetryRuntime) return validation;
+      // Both candidates have already released their contexts. Keep the model
+      // suspended, stop on repeated infrastructure failure, and retain the HTML.
+      if (runtimeAttempt === 1) {
+        validation.retryable = false;
+        return validation;
+      }
+      if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+      trace.stage('Повторная проверка', 'Не удалось завершить загрузку сцены. Повторно запускаю тот же HTML без генерации модели.');
+      if (status) setShellText(status, 'Повторно запускаю сохранённый HTML без генерации модели.');
     }
   };
 }

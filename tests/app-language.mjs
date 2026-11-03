@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {translateShell, createShellTextManager} from '../app-language.js';
-import {setLanguage} from '../i18n.js?v=20261103-workspace-3';
+import {setLanguage} from '../i18n.js?v=20261103-runtime-4';
 
 setLanguage('en', {persist:false});
 assert.equal(translateShell('Модель не загружена'), 'Model not loaded');

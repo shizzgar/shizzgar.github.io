@@ -283,7 +283,8 @@ export async function runAgent({ prompt, image = null, previousCode = '', initia
     const diagnostic = cleanErrors(result.errors, 'Сцена не прошла проверку выполнения.');
     lastErrors = [diagnostic];
     if (!unchanged) {
-      onEvent({type:'validation_failed', attempt, maxAttempts:attemptsLimit, errors:lastErrors, warnings:result.warnings || [], evidence:result.evidence});
+      onEvent({type:'validation_failed', attempt, maxAttempts:attemptsLimit, errors:lastErrors, warnings:result.warnings || [], evidence:result.evidence,
+        diagnostics:result.diagnostics, phase:result.phase, infrastructureFailure:result.infrastructureFailure});
       if (html && result.retryable !== false && !result.contextLost) rejectedDocuments.set(html, diagnostic);
     }
     if (!html && truncated) {

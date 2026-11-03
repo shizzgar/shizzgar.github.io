@@ -1,9 +1,11 @@
-import { getLanguage } from './i18n.js?v=20261103-workspace-3';
-import { runtimeTranslations, runtimePatterns } from './runtime-translations.js?v=20261103-workspace-3';
+import { getLanguage } from './i18n.js?v=20261103-runtime-4';
+import { runtimeTranslations, runtimePatterns } from './runtime-translations.js?v=20261103-runtime-4';
 
 // Translate only known interface messages. User prompts, generated source and
 // unknown browser/model diagnostics pass through unchanged.
 const messages = {
+  'Не удалось завершить загрузку сцены. Повторно запускаю тот же HTML без генерации модели.':'Scene loading did not complete. Retrying the same HTML without generating it again.',
+  'Повторно запускаю сохранённый HTML без генерации модели.':'Running the saved HTML again without model generation.',
   'ТЫ':'YOU',
   'FORMA · ПРОВЕРКА':'FORMA · CHECK',
   'FORMA · ИСПРАВЛЯЮ':'FORMA · REPAIR',

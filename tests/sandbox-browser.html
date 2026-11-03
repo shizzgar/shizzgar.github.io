@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forma sandbox runtime checks</title>
+<style>body{font:15px/1.5 system-ui;margin:24px;background:#101720;color:#dce5ed}main{max-width:1000px;margin:auto}h1{font-size:24px}button{font:inherit;padding:9px 14px;border-radius:6px;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#18232e;border:1px solid #344354;border-radius:8px}iframe{width:360px;height:160px;border:1px solid #344354}.fixture{position:fixed;left:-10000px;top:0;visibility:hidden}a{color:#bad397}</style>
+<main><a href="../">Forma</a><h1>Sandbox runtime checks</h1><p>These fixtures test module loading and runtime diagnostics. They do not require model weights or a GPU.</p><button id="run" type="button">Run runtime checks</button><pre id="result" role="status">Not run</pre><div id="fixtures" class="fixture"></div></main>
+<script type="module">
+import {validateScene,releaseScene} from '../sandbox-runner.js?v=20261103-runtime-4';
+const result = document.getElementById('result'), button = document.getElementById('run');
+const documentFor = script => '<!doctype html><html><body><canvas width="320" height="120"></canvas><script type="module">'+script+'<\/script></body></html>';
+button.addEventListener('click',async()=>{
+  button.disabled=true; result.textContent='Running…'; const reports=[];
+  try {
+    const fixtures=[
+      {name:'Pinned Three.js module loads inside the opaque sandbox', marker:'FORMA_QA_THREE_160', source:'import * as THREE from "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js"; throw new Error("FORMA_QA_THREE_" + THREE.REVISION);', check:r=>r.errors.some(x=>x.includes('FORMA_QA_THREE_160')) && !r.infrastructureFailure},
+      {name:'Blocked imports produce repairable policy diagnostics', source:'import "https://example.invalid/forma-missing-module.js";',check:r=>r.diagnostics.some(x=>x.kind==='policy') && r.retryable===true},
+      {name:'Actual script exceptions retain their diagnostic',source:'throw new TypeError("FORMA_QA_REAL_SCRIPT_ERROR");',check:r=>r.errors.some(x=>x.includes('FORMA_QA_REAL_SCRIPT_ERROR')) && r.retryable===true},
+    ];
+    for(const fixture of fixtures){
+      const frame=document.createElement('iframe');document.getElementById('fixtures').append(frame);
+      try{const r=await validateScene({iframe:frame,html:documentFor(fixture.source),timeoutMs:8000,settleMs:250}); reports.push({name:fixture.name,status:fixture.check(r)?'PASS':'FAIL',phase:r.phase,infrastructureFailure:r.infrastructureFailure,diagnostics:r.diagnostics,errors:r.errors});}
+      finally{await releaseScene(frame);frame.remove();}
+      result.textContent=JSON.stringify(reports,null,2);
+    }
+    result.dataset.status=reports.every(x=>x.status==='PASS')?'pass':'fail';
+  }catch(error){result.textContent=String(error?.stack||error);result.dataset.status='fail';}
+  finally{button.disabled=false;}
+});
+</script></html>

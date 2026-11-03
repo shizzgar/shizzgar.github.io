@@ -1,6 +1,12 @@
 // Exact shell messages only. Arbitrary model output, code and device names must
 // remain untouched. Dynamic patterns capture values without interpreting them.
 export const runtimeTranslations = {
+  'Сцена не завершила запуск за отведённое время. Проверь доступность Three.js и работу браузера.':'The scene did not finish starting in time. Check Three.js availability and the browser.',
+  'Сцена уже рисует, но загрузка документа ещё не завершена; ошибки продолжают отслеживаться.':'The scene is rendering while the document is still loading; runtime errors remain monitored.',
+  'Не удалось загрузить или связать модульный скрипт или его зависимости. Браузер не передал подробности ошибки импорта.':'The module script or its dependencies could not be loaded or linked. The browser did not provide import error details.',
+  'Активный WebGL-контекст не обнаружен.':'No active WebGL context was detected.',
+  'В сцене не появился canvas для 3D-рендеринга.':'The scene did not create a canvas for 3D rendering.',
+  'Canvas сцены не имеет видимого размера.':'The scene canvas has no visible size.',
   'Проверка устройства отменена.': 'Device check cancelled.',
   'Нет данных от движка': 'No engine data',
   'CPU/WASM: не удалось получить WebGPU-адаптер': 'CPU/WASM: no WebGPU adapter was available',
@@ -163,6 +169,9 @@ const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Captures contain filenames, device identifiers, numbers or raw error details.
 // Translators preserve those values verbatim.
 export const runtimePatterns = [
+  [/^Не удалось загрузить ресурс: ([\s\S]+)$/, source => `Could not load resource: ${source}`],
+  [/^Не удалось загрузить или связать модульный скрипт: ([\s\S]+)\. Браузер не передал подробности ошибки импорта\.$/, source => `Could not load or link the module script: ${source}. The browser did not provide import error details.`],
+  [/^Политика выполнения сцены заблокировала скрипт \(([^)]+)\): ([\s\S]+)\. Используй встроенный код и только разрешённый модуль Three\.js core ([\s\S]+); не используй другие импорты, eval или new Function\.$/, (directive, source, library) => `The scene execution policy blocked a script (${directive}): ${source}. Use inline code and only the allowed Three.js core module ${library}; avoid other imports, eval or new Function.`],
   [/^Движок сообщил (\d+)\/(\d+) слоёв; наличие GPU-буферов смотри отдельно$/, (count, total) => `The engine reported ${count}/${total} layers; check GPU buffers separately`],
   [/^≈ (.+) ГиБ$/, value => `≈ ${value} GiB`],
   [/^(.+) \(только буферы весов модели\)$/, value => `${value.replace(/ МиБ/g, ' MiB')} (model weight buffers only)`],

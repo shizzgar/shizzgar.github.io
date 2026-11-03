@@ -1,7 +1,7 @@
 // Create a single ZIP directly on the user's disk from pre-split GGUF files.
 // Each response is consumed as a stream; model weights are not buffered in RAM.
-import { ZipStreamWriter } from './zip-stream.js?v=20261103-workspace-3';
-import { downloadResumable } from './resumable-cache.js?v=20261103-workspace-3';
+import { ZipStreamWriter } from './zip-stream.js?v=20261103-runtime-4';
+import { downloadResumable } from './resumable-cache.js?v=20261103-runtime-4';
 
 const MODEL_REPO = 'ReallyFloppyPenguin/Qwen3.5-4B-3D-Coder-GGUF-split';
 const MODEL_API = `https://huggingface.co/api/models/${MODEL_REPO}/tree/main?recursive=true`;

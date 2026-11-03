@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-app-version="20261103-workspace-3">
+<html lang="ru" data-app-version="20261103-runtime-4">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,8 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20261103-workspace-3">
-  <link rel="stylesheet" href="./trace-panel.css?v=20261103-workspace-3">
+  <link rel="stylesheet" href="./styles.css?v=20261103-runtime-4">
+  <link rel="stylesheet" href="./trace-panel.css?v=20261103-runtime-4">
 </head>
 <body>
 <div class="app-shell">
@@ -69,7 +69,7 @@
     <details class="chrome-linux-guide settings-section"><summary data-i18n="ui.linux.title">Chrome на Linux и GPU</summary><p data-i18n-html="ui.linux.intro">Включи аппаратное ускорение и нажми «Проверить WebGPU». Для движка нужны адаптер и <code>shader-f16</code> в окне и тестовом worker. Это не подтверждает работу самой модели.</p><ol><li data-i18n="ui.linux.exit">Сохрани работу и полностью выйди из Chrome, включая фоновые процессы. Иначе новые параметры могут не примениться.</li><li><span data-i18n="ui.linux.session">Проверь тип сессии в терминале:</span><pre><code>printf 'Session: %s\nWayland: %s\n' "$XDG_SESSION_TYPE" "$WAYLAND_DISPLAY"</code></pre><span data-i18n-html="ui.linux.wayland">Для сессии <code>wayland</code> с доступным Wayland display:</span><pre><code>google-chrome-stable --ozone-platform=wayland</code></pre><span data-i18n="ui.linux.x11">Для X11 или без Wayland display:</span><pre><code>google-chrome-stable</code></pre></li><li data-i18n-html="ui.linux.verify">Проверь WebGPU в Forma и на <code>chrome://gpu</code>, командную строку — на <code>chrome://version</code>. Во время генерации смотри буферы весов WebGPU в трассе.</li></ol><details><summary data-i18n="ui.linux.experimentalTitle">Экспериментальные параметры NVIDIA</summary><p data-i18n-html="ui.linux.experimental">Эти параметры обходят ограничения и могут вызвать нестабильность. В одной из версий Dawn <code>shader-f16</code> на Vulkan/NVIDIA штатно включается с драйвером 615.71. Принудительное включение на старом драйвере может вызывать ошибки.</p><span class="command-label" data-i18n="ui.linux.waylandCommand">Wayland:</span><pre><code>google-chrome-stable --ozone-platform=wayland --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre><span class="command-label" data-i18n="ui.linux.x11Command">X11 с OpenGL для ANGLE:</span><pre><code>google-chrome-stable --ozone-platform=x11 --use-angle=gl --enable-features=Vulkan --enable-unsafe-webgpu --enable-dawn-features=vulkan_enable_f16_on_nvidia</code></pre><p data-i18n-html="ui.linux.return">Для возврата к обычному запуску выйди из Chrome и запусти без флагов. WebGPU и WebGL могут работать по-разному; свободная VRAM недоступна. <a href="https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips" target="_blank" rel="noopener noreferrer">Диагностика Chrome ↗</a></p></details></details>
   </div>
 </dialog>
-<script type="module" src="./app.js?v=20261103-workspace-3"></script>
+<script type="module" src="./app.js?v=20261103-runtime-4"></script>
 </body>
 </html>
 
