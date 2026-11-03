@@ -1,27 +1,30 @@
 <!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forma sandbox runtime checks</title>
-<style>body{font:15px/1.5 system-ui;margin:24px;background:#101720;color:#dce5ed}main{max-width:1000px;margin:auto}h1{font-size:24px}button{font:inherit;padding:9px 14px;border-radius:6px;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#18232e;border:1px solid #344354;border-radius:8px}iframe{width:360px;height:160px;border:1px solid #344354}.fixture{position:fixed;left:-10000px;top:0;visibility:hidden}a{color:#bad397}</style>
-<main><a href="../">Forma</a><h1>Sandbox runtime checks</h1><p>These fixtures test module loading and runtime diagnostics. They do not require model weights or a GPU.</p><button id="run" type="button">Run runtime checks</button><pre id="result" role="status">Not run</pre><div id="fixtures" class="fixture"></div></main>
+<style>body{font:15px/1.5 system-ui;margin:24px;background:#101720;color:#dce5ed}main{max-width:1000px;margin:auto}h1{font-size:24px}button{font:inherit;padding:9px 14px;border-radius:6px;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#18232e;border:1px solid #344354;border-radius:8px}iframe{width:360px;height:160px;border:1px solid #344354;background:#18232e}.fixture{position:fixed;right:24px;top:180px;z-index:3;opacity:1}.fixture:empty{display:none}a{color:#bad397}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{text-align:left;padding:12px;border-bottom:1px solid #344354}.pass{color:#bad397}.fail{color:#ff9b9b}summary{cursor:pointer;color:#a6b7ca}</style>
+<main><a href="../">Forma</a><h1>Sandbox runtime checks</h1><p>These fixtures test module loading, native animation frames and runtime diagnostics. They do not require model weights or a GPU.</p><button id="run" type="button">Run runtime checks</button><p id="status" role="status">Not run</p><table><thead><tr><th>Runtime scenario</th><th>Result</th></tr></thead><tbody id="summary"></tbody></table><details><summary>Full diagnostic records</summary><pre id="result">Not run</pre></details><div id="fixtures" class="fixture"></div></main>
 <script type="module">
-import {validateScene,releaseScene} from '../sandbox-runner.js?v=20261103-runtime-4';
-const result = document.getElementById('result'), button = document.getElementById('run');
+import {validateScene,releaseScene} from '../sandbox-runner.js?v=20261103-recovery-5';
+const result = document.getElementById('result'), button = document.getElementById('run'), summary = document.getElementById('summary'), status = document.getElementById('status');
 const documentFor = script => '<!doctype html><html><body><canvas width="320" height="120"></canvas><script type="module">'+script+'<\/script></body></html>';
 button.addEventListener('click',async()=>{
-  button.disabled=true; result.textContent='Running…'; const reports=[];
+  button.disabled=true; result.textContent='Running…'; status.textContent='Running…'; summary.replaceChildren(); const reports=[];
   try {
     const fixtures=[
       {name:'Pinned Three.js module loads inside the opaque sandbox', marker:'FORMA_QA_THREE_160', source:'import * as THREE from "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js"; throw new Error("FORMA_QA_THREE_" + THREE.REVISION);', check:r=>r.errors.some(x=>x.includes('FORMA_QA_THREE_160')) && !r.infrastructureFailure},
       {name:'Blocked imports produce repairable policy diagnostics', source:'import "https://example.invalid/forma-missing-module.js";',check:r=>r.diagnostics.some(x=>x.kind==='policy') && r.retryable===true},
       {name:'Actual script exceptions retain their diagnostic',source:'throw new TypeError("FORMA_QA_REAL_SCRIPT_ERROR");',check:r=>r.errors.some(x=>x.includes('FORMA_QA_REAL_SCRIPT_ERROR')) && r.retryable===true},
+      {name:'Native animation frames reach a visible sandbox',source:'await new Promise(resolve => requestAnimationFrame(resolve)); throw new Error("FORMA_QA_NATIVE_FRAME");',check:r=>r.errors.some(x=>x.includes('FORMA_QA_NATIVE_FRAME')) && r.evidence?.scheduler?.callbacks > 0 && r.evidence.scheduler.requested > 0},
     ];
     for(const fixture of fixtures){
       const frame=document.createElement('iframe');document.getElementById('fixtures').append(frame);
-      try{const r=await validateScene({iframe:frame,html:documentFor(fixture.source),timeoutMs:8000,settleMs:250}); reports.push({name:fixture.name,status:fixture.check(r)?'PASS':'FAIL',phase:r.phase,infrastructureFailure:r.infrastructureFailure,diagnostics:r.diagnostics,errors:r.errors});}
+      try{const r=await validateScene({iframe:frame,html:documentFor(fixture.source),timeoutMs:8000,settleMs:250}); reports.push({name:fixture.name,status:fixture.check(r)?'PASS':'FAIL',phase:r.phase,infrastructureFailure:r.infrastructureFailure,evidence:r.evidence,diagnostics:r.diagnostics,errors:r.errors});}
       finally{await releaseScene(frame);frame.remove();}
       result.textContent=JSON.stringify(reports,null,2);
+      const report = reports.at(-1), row=document.createElement('tr'), name=document.createElement('td'), state=document.createElement('td');name.textContent=report.name;state.textContent=report.status;state.className=report.status.toLowerCase();row.append(name,state);summary.append(row);
     }
     result.dataset.status=reports.every(x=>x.status==='PASS')?'pass':'fail';
-  }catch(error){result.textContent=String(error?.stack||error);result.dataset.status='fail';}
+    status.textContent=`${reports.filter(x=>x.status==='PASS').length} / ${reports.length} scenarios passed`;
+  }catch(error){result.textContent=String(error?.stack||error);result.dataset.status='fail';status.textContent='Check failed';}
   finally{button.disabled=false;}
 });
 </script></html>

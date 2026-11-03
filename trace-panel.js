@@ -359,7 +359,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => '', 
     const call = toolCalls.get(id);
     if (!call) return;
     const failed = failure !== undefined && failure !== null && failure !== '';
-    record('tool_finish', {toolId:id, name:call.name, status:failed ? 'error' : 'done', ...(failed ? {error:failure} : {output}), ...(typeof screenshot === 'string' && screenshot.length <= 1000000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(screenshot) ? {screenshot} : {})});
+    record('tool_finish', {toolId:id, name:call.name, status:failed ? 'error' : 'done', ...(failed ? {error:failure} : {}), ...(output === undefined ? {} : {output}), ...(typeof screenshot === 'string' && screenshot.length <= 1000000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(screenshot) ? {screenshot} : {})});
     bind(call.summary, () => `${failed ? '!' : '✓'} ${shell(call.name)} · ${failed ? tr('ошибка', 'error') : tr('готово', 'done')}`);
     call.box.dataset.state = failed ? 'error' : 'done';
     const result = element('details', 'trace-tool');
@@ -369,6 +369,12 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => '', 
     const label = bind(element('div', 'trace-tool-label'), () => failed ? tr('ОШИБКА', 'ERROR') : tr('РЕЗУЛЬТАТ', 'RESULT'));
     const value = failed && failure instanceof Error ? failure.message : failed ? failure : output;
     result.append(label, bind(element('pre', 'trace-tool-io'), () => formatToolValue(value)));
+    if (failed && output !== undefined) {
+      const data = element('details','trace-tool');
+      data.append(bind(element('summary','trace-tool-summary'), () => tr('Данные проверки', 'Validation data')),
+        bind(element('pre','trace-tool-io'), () => formatToolValue(output)));
+      result.append(data);
+    }
     // Accept only the bounded JPEG data URL returned by the scene validator.
     // Never load arbitrary URLs, SVG, or remote resources into the parent page.
     if (typeof screenshot === 'string' && screenshot.length <= 1000000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(screenshot)) {
@@ -410,10 +416,21 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => '', 
       // arbitrary HF tokens assembled across streamed chunks.
       return serializable(snapshot);
     });
+    const currentRunId = events.at(-1)?.runId ?? 0;
+    const currentEvents = events.filter(entry => entry.runId === currentRunId);
+    const lastFinish = currentEvents.findLast(entry => entry.type === 'finish');
+    const pending = new Map();
+    for (const entry of currentEvents) {
+      if (entry.type === 'tool_start') pending.set(entry.toolId, {toolId:entry.toolId,name:entry.name,startedAt:entry.timestamp});
+      if (entry.type === 'tool_finish') pending.delete(entry.toolId);
+    }
+    const recording = {runId:currentRunId,
+      state:lastFinish?.state || (currentEvents.some(entry => entry.type === 'begin' || entry.type === 'tool_start') ? 'running' : 'idle'),
+      pendingTools:[...pending.values()]};
     return {
       schema:'forma.agent-trace', schemaVersion:1, exportedAt:new Date().toISOString(),
       appVersion:protect(globalThis.document?.documentElement?.dataset?.appVersion || '') || null, uiLanguage:locale,
-      complete:true, archiveTruncated:false,
+      complete:true, archiveTruncated:false, recording,
       streamEncoding:'Complete assembled text, chunk counts and first/last chunk times. Only model-provided reasoning is included.',
       attachments:'File and binary inputs are represented by metadata; their bytes are not retained in the trace.',
       visibleLimits:{events:MAX_EVENTS, streamCharacters:MAX_OUTPUT_CHARS, toolCharacters:MAX_TOOL_CHARS},
@@ -425,7 +442,7 @@ export function createTracePanel(mount, {redact = x => x, getSecret = () => '', 
     const stamp = data.exportedAt.replace(/[:.]/g, '-');
     if (format === 'json') return {filename:`forma-trace-${stamp}.json`, mimeType:'application/json;charset=utf-8', content:JSON.stringify(data, null, 2)};
     if (format !== 'text' && format !== 'txt') throw new TypeError('Unsupported trace format');
-    const lines = ['FORMA — AGENT TRACE', `Exported: ${data.exportedAt}`, 'Complete recorded content; secrets redacted; files contain metadata only.', ''];
+    const lines = ['FORMA — AGENT TRACE', `Exported: ${data.exportedAt}`, `Run ${data.recording.runId}: ${data.recording.state}; active tools: ${data.recording.pendingTools.length}`, 'Complete recorded content; secrets redacted; files contain metadata only.', ''];
     for (const entry of data.events) {
       lines.push(`[${entry.sequence}] run ${entry.runId} +${(entry.elapsedMs / 1000).toFixed(3)}s ${entry.type} — ${entry.timestamp}`);
       if (entry.type === 'model_stream') {

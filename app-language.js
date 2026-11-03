@@ -1,9 +1,24 @@
-import { getLanguage } from './i18n.js?v=20261103-runtime-4';
-import { runtimeTranslations, runtimePatterns } from './runtime-translations.js?v=20261103-runtime-4';
+import { getLanguage } from './i18n.js?v=20261103-recovery-5';
+import { runtimeTranslations, runtimePatterns } from './runtime-translations.js?v=20261103-recovery-5';
 
 // Translate only known interface messages. User prompts, generated source and
 // unknown browser/model diagnostics pass through unchanged.
 const messages = {
+  'Ожидаю активную вкладку':'Waiting for the active tab',
+  'Проверка сцены продолжится, когда вкладка снова станет видимой. HTML сохранён, модель остаётся выгруженной.':'Scene validation will continue when this tab becomes visible again. HTML is retained and the model remains paused.',
+  'Ожидаю активную вкладку для проверки сцены':'Waiting for this tab to become visible before scene validation',
+  'Проверяю сцену · предварительный результат':'Checking the scene · preliminary result',
+  'Решение восстановления':'Recovery decision',
+  'Восстановление первого кадра':'Recovering the first frame',
+  'Контекст WebGL создан, но первый кадр не подтверждён. Проверяю тот же HTML в видимой области без новой генерации.':'The WebGL context was created, but the first frame is unconfirmed. Checking the same HTML in a visible area without generating it again.',
+  'Сцена сообщила об ошибке. Сначала повторно проверяю сохранённый HTML без новой генерации…':'The scene reported an error. First, rechecking the saved HTML without generating it again…',
+  'Восстанавливаю работу сцены…':'Recovering the scene…',
+  'Восстановление работающей сцены':'Recovering a running scene',
+  'Среда пока не позволяет восстановить сцену; HTML сохранён.':'The runtime cannot currently restore the scene; HTML is retained.',
+  'Повторный запуск не устранил ошибку кода; передаю модели сохранённый HTML и полную диагностику.':'Restarting did not resolve the code error; sending the saved HTML and full diagnostics to the model.',
+  'Сцена восстановлена повторным запуском без новой генерации.':'The scene was restored by restarting, without model generation.',
+  'Восстановлено':'Recovered',
+  'Восстановление отменено.':'Recovery cancelled.',
   'Не удалось завершить загрузку сцены. Повторно запускаю тот же HTML без генерации модели.':'Scene loading did not complete. Retrying the same HTML without generating it again.',
   'Повторно запускаю сохранённый HTML без генерации модели.':'Running the saved HTML again without model generation.',
   'ТЫ':'YOU',
@@ -157,6 +172,7 @@ const messages = {
 };
 
 const patterns = [
+  [/^(Ошибка исправлена и запуск сцены проверен\.|Сцена восстановлена повторным запуском без новой генерации\.) Замечание проверки: ([\s\S]+)$/, (message, warning) => `${translateShell(message, 'en')} Validation note: ${translateShell(warning, 'en')}`],
   [/^(Локальная модель|Модель): (текст и картинки|текст)(.*)$/s, (name, modality, backend) => `${messages[name]}: ${messages[modality]}${translateShell(backend, 'en')}`],
   [/^Создаю сцену · попытка (.+)…$/, attempt => `Creating the scene · attempt ${attempt}…`],
   [/^Пишу код · попытка (.+) · (\d+) символов$/, (attempt, count) => `Writing code · attempt ${attempt} · ${count} characters`],

@@ -1,6 +1,6 @@
-import { prepareLocalModel, validateProjectorFile } from './local-model.js?v=20261103-runtime-4';
-import { downloadFiles, modelShardUrls } from './progress-download.js?v=20261103-runtime-4';
-import { createOffloadLogCollector } from './gpu-engine-log.js?v=20261103-runtime-4';
+import { prepareLocalModel, validateProjectorFile } from './local-model.js?v=20261103-recovery-5';
+import { downloadFiles, modelShardUrls } from './progress-download.js?v=20261103-recovery-5';
+import { createOffloadLogCollector } from './gpu-engine-log.js?v=20261103-recovery-5';
 // Browser-local GGUF inference, using Wllama's OpenAI-compatible v3 API.
 // Inference never leaves the device; runtime and weights are downloaded on load.
 const WLLAMA_VERSION = '3.8.1';
@@ -360,7 +360,7 @@ export async function generate({ prompt, image = null, previousCode = '', onToke
   if (image && !visionAvailable) throw new Error('Vision-компонент не загружен.');
   running = true;
   try {
-    const system = 'You are a creative 3D coding assistant. Return one complete standalone HTML document and nothing else. Build an interactive Three.js scene. Use only the Three.js core ES module from https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js. Do not import addons or legacy examples/js paths; implement camera controls directly. Include all code in the HTML, keep the scene well lit, and size it to the viewport.';
+    const system = 'You are a creative 3D coding assistant. Return one complete standalone HTML document and nothing else. Build an interactive Three.js scene. Use only the Three.js core ES module from https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js. Do not import addons or legacy examples/js paths; implement camera controls directly. Include all code in the HTML, keep the scene well lit, and size it to the viewport. After constructing the scene and camera, call renderer.render(scene, camera) once immediately before starting requestAnimationFrame or renderer.setAnimationLoop; do not make the first frame depend on a click or a future load event. On repairs, preserve the requested scene and interactions, fix the reported cause, and do not replace the scene with an error message or hide errors.';
     const text = previousCode
       ? `Update this existing scene according to the request. Return the complete updated HTML document.\n\nRequest: ${prompt.trim()}\n\nExisting HTML:\n${previousCode}`
       : prompt.trim();

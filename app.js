@@ -1,15 +1,16 @@
-import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js?v=20261103-runtime-4';
-import { checkConnectivity, checkWebGPU } from './diagnostics.js?v=20261103-runtime-4';
-import { probeInferenceWebGPU } from './webgpu-inference-probe.js?v=20261103-runtime-4';
-import { createBundle } from './bundle-download.js?v=20261103-runtime-4';
-import { runAgent } from './agent-loop.js?v=20261103-runtime-4';
-import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js?v=20261103-runtime-4';
-import { probeWebGLRecovery } from './webgl-recovery.js?v=20261103-runtime-4';
-import { createTracePanel } from './trace-panel.js?v=20261103-runtime-4';
-import { createProfiler } from './profiling-ui.js?v=20261103-runtime-4';
-import { getLanguage, getLanguageMode, setLanguage, onLanguageChange, registerMessages, applyTranslations } from './i18n.js?v=20261103-runtime-4';
-import { uiMessages } from './ui-messages.js?v=20261103-runtime-4';
-import { translateShell, createShellTextManager } from './app-language.js?v=20261103-runtime-4';
+import { loadModel, loadLocalModel, setLocalProjector, ensureVision, generate, suspendModel, resumeModel, getModelState, getLoadedContextInfo } from './inference.js?v=20261103-recovery-5';
+import { checkConnectivity, checkWebGPU } from './diagnostics.js?v=20261103-recovery-5';
+import { probeInferenceWebGPU } from './webgpu-inference-probe.js?v=20261103-recovery-5';
+import { createBundle } from './bundle-download.js?v=20261103-recovery-5';
+import { runAgent } from './agent-loop.js?v=20261103-recovery-5';
+import { planValidationRecovery } from './recovery-policy.js?v=20261103-recovery-5';
+import { validateScene, disposeScene, releaseScene } from './sandbox-runner.js?v=20261103-recovery-5';
+import { probeWebGLRecovery } from './webgl-recovery.js?v=20261103-recovery-5';
+import { createTracePanel } from './trace-panel.js?v=20261103-recovery-5';
+import { createProfiler } from './profiling-ui.js?v=20261103-recovery-5';
+import { getLanguage, getLanguageMode, setLanguage, onLanguageChange, registerMessages, applyTranslations } from './i18n.js?v=20261103-recovery-5';
+import { uiMessages } from './ui-messages.js?v=20261103-recovery-5';
+import { translateShell, createShellTextManager } from './app-language.js?v=20261103-recovery-5';
 
 registerMessages(uiMessages);
 applyTranslations();
@@ -340,14 +341,37 @@ ui['download-bundle'].addEventListener('click', async () => {
     setBusy(false);
   }
 });
+async function waitForVisibleDocument(signal, status) {
+  const isHidden = () => document.hidden === true || document.visibilityState === 'hidden';
+  if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+  if (!isHidden()) return;
+  const message = 'Проверка сцены продолжится, когда вкладка снова станет видимой. HTML сохранён, модель остаётся выгруженной.';
+  trace.stage('Ожидаю активную вкладку', message);
+  setShellText(ui['preview-status'], 'Ожидаю активную вкладку для проверки сцены');
+  if (status) setShellText(status, message);
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onVisible = () => { if (!isHidden()) { cleanup(); resolve(); } };
+    const onAbort = () => { cleanup(); reject(new DOMException('Проверка отменена.', 'AbortError')); };
+    document.addEventListener('visibilitychange', onVisible);
+    signal?.addEventListener('abort', onAbort, {once:true});
+    // Cover a visibility/abort transition between the initial check and hooks.
+    if (signal?.aborted) onAbort();
+    else onVisible();
+  });
+}
 function createCandidate() {
-  // Keep candidates in the stage while invisible. Moving an iframe after it has
-  // run can reload it; opacity keeps its real viewport and running context.
+  // Validate in a real, visible viewport. Fully transparent or hidden opaque
+  // iframes can suppress animation frames, which is not a generated-code bug.
+  // Keep this iframe in place when accepted: moving it may reload its document.
   const frame = document.createElement('iframe');
   frame.title = translateShell('Проверка 3D-сцены');
   frame.setAttribute('aria-hidden', 'true');
   frame.tabIndex = -1;
-  frame.style.opacity = '0';
+  frame.style.opacity = '1';
   frame.style.pointerEvents = 'none';
   frame.style.zIndex = '2';
   ui['preview-frame'].parentElement.appendChild(frame);
@@ -558,6 +582,11 @@ function agentGenerate(context) {
 }
 function agentValidator({status, session, selected, retainOnFailure = true}) {
   const runCandidate = async (html, signal) => {
+    await waitForVisibleDocument(signal, status);
+    if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
+    closeModelSettings();
+    setWorkspaceView('scene');
+    setShellText(ui['preview-status'], 'Проверяю сцену · предварительный результат');
     const frame = createCandidate();
     const lateIssues = [];
     let contextLost = false;
@@ -570,14 +599,15 @@ function agentValidator({status, session, selected, retainOnFailure = true}) {
           if (activeScene === session && session.frame === frame && ui['preview-frame'] === frame) {
             setShellText(ui['preview-status'], 'Потерян контекст WebGL');
             error(`Браузер или устройство потеряло контекст WebGL: ${detail.message}`);
-          } else { contextLost = true; lateIssues.push(detail.message.slice(0, 500)); }
+            queueLateRepair(session, detail);
+          } else { contextLost = true; lateIssues.push(detail.message.slice(0, 2000)); }
           return;
         }
         if (activeScene !== session || session.frame !== frame || ui['preview-frame'] !== frame) {
-          lateIssues.push(detail.message.slice(0, 500));
+          lateIssues.push(detail.message.slice(0, 2000));
           return;
         }
-        queueLateRepair(session, detail.message);
+        queueLateRepair(session, detail);
       }});
       if (lateIssues.length) {
         validation.ok = false;
@@ -634,38 +664,57 @@ function agentValidator({status, session, selected, retainOnFailure = true}) {
     if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
     await pauseModel();
     if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
-    for (let runtimeAttempt = 0; runtimeAttempt < 2; runtimeAttempt++) {
+    const recovery = {runtimeRetries:0, presentationRetries:0, restarts:0};
+    while (true) {
       if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
       const validation = await runCandidate(html, signal);
-      // A library download or an unstarted document is not a reason to ask the
-      // model to rewrite valid HTML. Only explicit sandbox classifications get
-      // this one retry; WebGL creation and loss use the recovery path above.
-      const canRetryRuntime = !validation.ok && !validation.contextLost &&
-        ['module-load', 'resource', 'startup-timeout'].includes(validation.infrastructureFailure);
-      if (!canRetryRuntime) return validation;
-      // Both candidates have already released their contexts. Keep the model
-      // suspended, stop on repeated infrastructure failure, and retain the HTML.
-      if (runtimeAttempt === 1) {
-        validation.retryable = false;
+      // The dedicated context-loss branch already probed a fresh context and
+      // the agent loop owns its single allowed repair; don't relabel it here.
+      if (validation.contextLost) return validation;
+      const plan = planValidationRecovery(validation, recovery);
+      if (!['retry-runtime','retry-presentation'].includes(plan.action)) {
+        // Only code-level failures go back to the model. Expose the evidence
+        // for a stalled first frame instead of a vague empty-canvas message.
+        if (plan.diagnosis && !validation.ok) validation.errors = [...(validation.errors || []), plan.diagnosis];
+        if (plan.action === 'stop') validation.retryable = false;
+        trace.stage('Решение восстановления', `${plan.action}: ${plan.reason}`);
         return validation;
       }
+      recovery.restarts++;
+      if (plan.action === 'retry-runtime') recovery.runtimeRetries++;
+      else recovery.presentationRetries++;
       if (signal?.aborted) throw new DOMException('Проверка отменена.', 'AbortError');
-      trace.stage('Повторная проверка', 'Не удалось завершить загрузку сцены. Повторно запускаю тот же HTML без генерации модели.');
-      if (status) setShellText(status, 'Повторно запускаю сохранённый HTML без генерации модели.');
+      const detail = plan.action === 'retry-presentation'
+        ? 'Контекст WebGL создан, но первый кадр не подтверждён. Проверяю тот же HTML в видимой области без новой генерации.'
+        : 'Не удалось завершить загрузку сцены. Повторно запускаю тот же HTML без генерации модели.';
+      trace.stage(plan.action === 'retry-presentation' ? 'Восстановление первого кадра' : 'Повторная проверка', detail);
+      if (status) setShellText(status, detail);
     }
   };
 }
-function queueLateRepair(session, message) {
+function normalizeLateIssue(detail) {
+  const input = detail && typeof detail === 'object' ? detail : {message:detail};
+  const item = {message:String(input.message || 'Ошибка выполнения сцены.').slice(0, 2000),
+    kind:typeof input.kind === 'string' ? input.kind.slice(0, 40) : 'script',
+    source:typeof input.source === 'string' ? input.source.slice(0, 500) : ''};
+  if (typeof input.rawMessage === 'string') item.rawMessage = input.rawMessage.slice(0, 2000);
+  for (const key of ['line','column']) if (Number.isSafeInteger(input[key]) && input[key] > 0) item[key] = input[key];
+  return item;
+}
+function queueLateRepair(session, detail) {
   if (activeScene !== session || session.frame !== ui['preview-frame']) return;
+  const issue = normalizeLateIssue(detail);
   if (session.lateRepairStarted) {
     if (!busy && !session.failureReported) {
       session.failureReported = true;
       setShellText(ui['preview-status'], 'Ошибка во время работы сцены');
-      error(`Сцена снова сообщила об ошибке после автоматического исправления: ${String(message || '').slice(0, 500)}`);
+      error(`Сцена снова сообщила об ошибке после автоматического исправления: ${issue.message}`);
     }
     return;
   }
-  if (!session.pendingError) session.pendingError = String(message || 'Ошибка выполнения сцены.').slice(0, 500);
+  const pending = Array.isArray(session.pendingError) ? session.pendingError : session.pendingError ? [normalizeLateIssue(session.pendingError)] : [];
+  if (pending.length < 6 && !pending.some(item => item.kind === issue.kind && item.source === issue.source && item.message === issue.message)) pending.push(issue);
+  session.pendingError = pending;
   schedulePendingRepair();
 }
 function schedulePendingRepair() {
@@ -680,39 +729,80 @@ function schedulePendingRepair() {
 }
 async function runLateRepair(session) {
   if (busy || activeScene !== session || session.frame !== ui['preview-frame'] || session.lateRepairStarted) return;
-  const diagnostic = session.pendingError;
+  const lateDiagnostics = (Array.isArray(session.pendingError) ? session.pendingError : [session.pendingError]).map(normalizeLateIssue);
+  const savedHtml = scene;
   session.pendingError = null;
   session.lateRepairStarted = true;
   const selected = {frame:null};
   const traceContext = {attempt:0, maxAttempts:2};
-  const status = appendMessage('FORMA · ИСПРАВЛЯЮ', 'Сцена сообщила об ошибке после запуска. Исправляю её…');
-  setShellText(ui['preview-status'], 'Исправляю ошибку сцены…');
+  const status = appendMessage('FORMA · ИСПРАВЛЯЮ', 'Сцена сообщила об ошибке. Сначала повторно проверяю сохранённый HTML без новой генерации…');
+  setShellText(ui['preview-status'], 'Восстанавливаю работу сцены…');
   error('');
   setBusy(true);
   trace.begin({preserve:true});
-  trace.stage('Поздняя ошибка', diagnostic);
-  agentController = new AbortController();
+  trace.stage('Поздняя ошибка', lateDiagnostics.map(item => item.message).join('\n'));
+  const controller = new AbortController();
+  const signal = controller.signal;
+  agentController = controller;
+  const recoveryTool = trace.toolStart('Восстановление работающей сцены', {html:savedHtml, diagnostics:lateDiagnostics});
+  let recoveryFinished = false;
+  let restoreOnFailure = true;
   ui['stop-agent'].hidden = false;
   ui['stop-agent'].disabled = false;
   setShellText(ui['stop-agent'], 'Остановить');
   syncMobileStop();
   try {
-    const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:scene, initialErrors:[diagnostic], generate:agentGenerate(traceContext),
-      validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext,session), signal:agentController.signal, maxAttempts:2});
-    if (!result.ok && result.lastHtml) retainUnverified(result.lastHtml, session);
-    if (!result.ok) throw new Error(result.reason === 'output_limit'
-      ? 'Достигнут лимит вывода или контекста до получения полного HTML. Полученные фрагменты доступны в трассе; предыдущая сцена сохранена.'
-      : (result.errors || []).join('; ') || 'Не удалось исправить ошибку.');
+    const ensureCurrent = () => {
+      if (signal.aborted) throw new DOMException('Восстановление отменено.', 'AbortError');
+      if (activeScene !== session) throw new Error('Сцена изменилась во время исправления.');
+    };
+    ensureCurrent();
+    await parkScene();
+    ensureCurrent();
+    let validation = await agentValidator({status,session,selected,retainOnFailure:false})(savedHtml, {signal});
+    ensureCurrent();
+    let acceptedHtml = savedHtml;
+    let usedModel = false;
+    if (!validation.ok) {
+      const canRepair = validation.contextLost === true
+        ? validation.infrastructureErrorOther === false
+        : validation.retryable !== false;
+      if (!canRepair) {
+        // The saved document has just exhausted its infrastructure recovery.
+        // Re-running it in finally would repeat the same failed attempts.
+        restoreOnFailure = false;
+        throw new Error((validation.errors || []).join('; ') || 'Среда пока не позволяет восстановить сцену; HTML сохранён.');
+      }
+      const state = getModelState();
+      if (!state.loaded && !state.suspended) throw new Error('Для исправления сцены сначала загрузи модель. HTML сохранён.');
+      if (!session.prompt?.trim()) throw new Error('Исходный запрос для исправления недоступен. HTML сохранён.');
+      const initialErrors = [...new Set([...(validation.errors || []), ...lateDiagnostics.map(item => `${item.kind}${item.source ? ' · ' + item.source : ''}\n${item.message}`)])];
+      trace.stage('Исправление', 'Повторный запуск не устранил ошибку кода; передаю модели сохранённый HTML и полную диагностику.');
+      const result = await runAgent({prompt:session.prompt, image:session.reference, previousCode:savedHtml, initialErrors, generate:agentGenerate(traceContext),
+        validate:agentValidator({status,session,selected}), onEvent:agentEvents(status,traceContext,session), signal, maxAttempts:2});
+      if (!result.ok && result.lastHtml) retainUnverified(result.lastHtml, session);
+      if (!result.ok) throw new Error(result.reason === 'output_limit'
+        ? 'Достигнут лимит вывода или контекста до получения полного HTML. Полученные фрагменты доступны в трассе; предыдущая сцена сохранена.'
+        : (result.errors || []).join('; ') || 'Не удалось исправить ошибку.');
+      ensureCurrent();
+      acceptedHtml = result.html;
+      validation = result.validation;
+      usedModel = true;
+    }
     if (activeScene !== session || !selected.frame) throw new Error('Сцена изменилась во время исправления.');
-    adoptCandidate(selected.frame, result.html);
-    clearUnverified();
+    adoptCandidate(selected.frame, acceptedHtml);
+    if (usedModel) clearUnverified();
     session.frame = selected.frame;
     session.parked = false;
     selected.frame = null;
-    const warning = (result.validation.warnings || []).join(' ');
-    setShellText(status, redact(warning ? `Ошибка исправлена; замечание проверки: ${warning}` : 'Ошибка исправлена и запуск сцены проверен.'));
-    trace.finish('Исправлено', 'done');
+    const warning = (validation.warnings || []).join(' ');
+    const message = usedModel ? 'Ошибка исправлена и запуск сцены проверен.' : 'Сцена восстановлена повторным запуском без новой генерации.';
+    setShellText(status, redact(warning ? `${message} Замечание проверки: ${warning}` : message));
+    trace.toolFinish(recoveryTool, {output:{usedModel, evidence:validation.evidence, diagnostics:validation.diagnostics, warnings:validation.warnings}});
+    recoveryFinished = true;
+    trace.finish(usedModel ? 'Исправлено' : 'Восстановлено', 'done');
   } catch (err) {
+    if (!recoveryFinished) trace.toolFinish(recoveryTool, {error:err});
     setShellText(status, err?.name === 'AbortError' ? 'Исправление остановлено.' : 'Автоматически исправить сцену не удалось.');
     if (err?.name !== 'AbortError') trace.stage('Не удалось исправить сцену', err?.message || String(err));
     trace.finish(err?.name === 'AbortError' ? 'Остановлено' : 'Ошибка', err?.name === 'AbortError' ? 'done' : 'error');
@@ -722,11 +812,13 @@ async function runLateRepair(session) {
     }
   } finally {
     await discardCandidate(selected.frame);
-    if (activeScene === session && session.parked) await restorePreviousScene();
-    agentController = null;
-    ui['stop-agent'].hidden = true;
-    syncMobileStop();
-    setBusy(false);
+    if (restoreOnFailure && activeScene === session && session.parked) await restorePreviousScene();
+    if (agentController === controller) {
+      agentController = null;
+      ui['stop-agent'].hidden = true;
+      syncMobileStop();
+      setBusy(false);
+    }
   }
 }
 ui['load-model'].addEventListener('click', async () => {

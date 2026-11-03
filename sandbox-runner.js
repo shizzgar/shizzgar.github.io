@@ -31,6 +31,40 @@ function bridge(nonce, settleMs, captureImage) {
     return id;
   };
   const stopTimers = () => { for (const id of timers) clearTimeout(id); timers.clear(); };
+  // Observe native scheduling without changing its clock or inventing draws.
+  // Three.js setAnimationLoop also uses window.requestAnimationFrame. A live
+  // context with a pending first callback is different from broken scene code.
+  const clockNow = () => typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const bridgeStartedAt = clockNow();
+  const frameRequests = new Set();
+  const nativeRequestFrame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+  const nativeCancelFrame = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null;
+  let framesRequested = 0, framesCalled = 0, lastFrameCallbackAt = null;
+  if (nativeRequestFrame) {
+    window.requestAnimationFrame = function(callback) {
+      if (typeof callback !== 'function') return nativeRequestFrame.call(window, callback);
+      if (releasing) return 0;
+      framesRequested++;
+      let id;
+      id = nativeRequestFrame.call(window, time => {
+        frameRequests.delete(id);
+        if (releasing) return;
+        framesCalled++;
+        lastFrameCallbackAt = Math.max(0, Math.round(clockNow() - bridgeStartedAt));
+        return callback.call(window, time);
+      });
+      frameRequests.add(id);
+      return id;
+    };
+    if (nativeCancelFrame) window.cancelAnimationFrame = function(id) {
+      frameRequests.delete(id);
+      return nativeCancelFrame.call(window, id);
+    };
+  }
+  const stopFrames = () => {
+    if (nativeCancelFrame) for (const id of frameRequests) { try { nativeCancelFrame.call(window, id); } catch (_) {} }
+    frameRequests.clear();
+  };
   const report = (message, kind = 'script', source = '', location = null) => {
     try {
       if (releasing) return;
@@ -88,6 +122,7 @@ function bridge(nonce, settleMs, captureImage) {
     if (event.source !== parent || !data || data.channel !== 'forma-runner-v1' || data.nonce !== nonce || data.type !== 'release') return;
     releasing = true;
     stopTimers();
+    stopFrames();
     let requested = 0, unsupported = 0, failed = 0;
     for (const item of contexts) {
       try {
@@ -155,6 +190,20 @@ function bridge(nonce, settleMs, captureImage) {
       catch (_) { return false; }
     });
     const drawCalls = Math.min(1000000, activeContexts.reduce((sum,item) => sum + item.draws, 0));
+    // A draw call can return without throwing while WebGL rejects it. Sample
+    // the actual error state only at the final observation, not on every draw.
+    if (includeImage) for (const item of activeContexts) {
+      if (typeof item.ctx.getError !== 'function') continue;
+      const names = {1280:'INVALID_ENUM',1281:'INVALID_VALUE',1282:'INVALID_OPERATION',1285:'OUT_OF_MEMORY',1286:'INVALID_FRAMEBUFFER_OPERATION',1287:'CONTEXT_LOST_WEBGL'};
+      try {
+        for (let count = 0; count < 4; count++) {
+          const code = item.ctx.getError();
+          if (!code) break;
+          report('WebGL: ' + (names[code] || 'UNKNOWN_ERROR') + ' (' + code + '). Ошибка зафиксирована после запуска сцены.', code === 1287 ? 'webgl-context-lost' : 'webgl-error');
+          if (code === 1287) break;
+        }
+      } catch (_) {}
+    }
     let screenshot = null;
     if (includeImage && ${captureImage} && activeContexts.length && drawCalls > 0) {
       try {
@@ -169,19 +218,27 @@ function bridge(nonce, settleMs, captureImage) {
         if (value.startsWith('data:image/jpeg;base64,') && value.length <= 1000000) screenshot = value;
       } catch (_) {}
     }
-    return {canvasCount:canvases.length, visibleCanvasCount, webglContexts:activeContexts.length, drawCalls, drawObservationAvailable:activeContexts.some(item => item.observed), screenshot, errors, phase, documentReadyState:String(document.readyState || 'unknown'), loadPending:loadedAt === null, elapsedMs:Math.max(0, Math.round(now() - started))};
+    const scheduler = nativeRequestFrame ? {requested:framesRequested, callbacks:framesCalled, pending:frameRequests.size, lastCallbackAtMs:lastFrameCallbackAt, documentVisibility:typeof document.visibilityState === 'string' ? document.visibilityState : 'unknown'} : null;
+    return {canvasCount:canvases.length, visibleCanvasCount, webglContexts:activeContexts.length, drawCalls, drawObservationAvailable:activeContexts.some(item => item.observed), scheduler, screenshot, errors, phase, documentReadyState:String(document.readyState || 'unknown'), loadPending:loadedAt === null, elapsedMs:Math.max(0, Math.round(now() - started))};
   };
   const inspect = () => {
     if (releasing || readySent) return;
     const p = snapshot();
+    // Native RAF may pause in a background document. Resume on visibility
+    // instead of burning the startup budget or blaming the model's code.
+    if (document.visibilityState === 'hidden' && errors.length === 0) {
+      send('progress', p);
+      return;
+    }
     if (p.webglContexts > 0 && p.drawCalls > 0) { if (firstDrawAt === null) firstDrawAt = now(); }
     else firstDrawAt = null;
     const settledAfterLoad = loadedAt !== null && now() - loadedAt >= ${settleMs};
     const settledDraws = firstDrawAt !== null && now() - firstDrawAt >= ${settleMs};
-    if (settledAfterLoad || settledDraws) {
+    const awaitingFirstDraw = p.webglContexts > 0 && p.drawCalls === 0 && errors.length === 0;
+    if ((settledAfterLoad && !awaitingFirstDraw) || settledDraws) {
       readySent = true;
       stopTimers();
-      send('ready', ${captureImage} ? snapshot(true) : p);
+      send('ready', snapshot(true));
       return;
     }
     send('progress', p);
@@ -192,7 +249,13 @@ function bridge(nonce, settleMs, captureImage) {
   const hasDocument = typeof document !== 'undefined' && typeof document.querySelectorAll === 'function';
   addEventListener('DOMContentLoaded', () => { phase = loadedAt === null ? 'dom-ready' : 'loaded'; }, {once:true});
   addEventListener('load', () => { phase = 'loaded'; loadedAt = now(); }, {once:true});
-  addEventListener('pagehide', () => { releasing = true; stopTimers(); }, {once:true});
+  addEventListener('visibilitychange', () => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'hidden' && !releasing && !readySent) {
+      stopTimers();
+      schedule(inspect, 0);
+    }
+  });
+  addEventListener('pagehide', () => { releasing = true; stopTimers(); stopFrames(); }, {once:true});
   if (hasDocument) {
     if (document.readyState === 'complete') { phase = 'loaded'; loadedAt = now(); }
     send('boot', {phase, documentReadyState:String(document.readyState || 'unknown')});
@@ -355,6 +418,29 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
     let ended = false;
     let disposed = false;
     let timer;
+    const parentDocument = typeof document !== 'undefined' ? document : null;
+    const clockNow = () => typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+    const startedAt = clockNow();
+    let remainingMs = timeout, activeAt = null;
+    const stopDeadline = () => {
+      clearTimeout(timer);
+      if (activeAt !== null) remainingMs = Math.max(0, remainingMs - (clockNow() - activeAt));
+      activeAt = null;
+      parentDocument?.removeEventListener?.('visibilitychange', onVisibilityChange);
+    };
+    const armDeadline = () => {
+      if (ended || parentDocument?.visibilityState === 'hidden') return;
+      activeAt = clockNow();
+      timer = setTimeout(() => finish(resultFromSnapshot(true)), Math.max(1, remainingMs));
+    };
+    const onVisibilityChange = () => {
+      if (ended) return;
+      if (parentDocument?.visibilityState === 'hidden') {
+        clearTimeout(timer);
+        if (activeAt !== null) remainingMs = Math.max(0, remainingMs - (clockNow() - activeAt));
+        activeAt = null;
+      } else if (activeAt === null) armDeadline();
+    };
     let lastSnapshot = null;
     let phase = 'awaiting-bridge';
     let documentReadyState = 'unknown';
@@ -362,7 +448,7 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
     const cleanup = () => {
       if (disposed) return;
       disposed = true;
-      clearTimeout(timer);
+      stopDeadline();
       window.removeEventListener('message', onMessage);
       signal?.removeEventListener('abort', onAbort);
       if (sessions.get(iframe) === dispose) sessions.delete(iframe);
@@ -381,7 +467,7 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
     const finish = result => {
       if (ended) return;
       ended = true;
-      clearTimeout(timer);
+      stopDeadline();
       signal?.removeEventListener('abort', onAbort);
       if (result.ok) { resolve(result); return; }
       // Failed candidates can still own live WebGL resources.
@@ -390,7 +476,7 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
     const onAbort = () => {
       if (ended) { cleanup(); return; }
       ended = true;
-      clearTimeout(timer);
+      stopDeadline();
       signal?.removeEventListener('abort', onAbort);
       releaseCandidate(() => reject(new DOMException('Проверка отменена.', 'AbortError')));
     };
@@ -427,6 +513,12 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
       updatePhase(p);
       if (Array.isArray(p.errors)) for (const item of p.errors.slice(0,MAX_ERRORS + 1)) appendError(item);
       const evidence = {canvasCount:p.canvasCount, visibleCanvasCount:p.visibleCanvasCount, webglContexts:p.webglContexts, drawCalls:p.drawCalls, drawObservationAvailable:!!p.drawObservationAvailable};
+      const scheduler = p.scheduler;
+      if (scheduler && [scheduler.requested,scheduler.callbacks,scheduler.pending].every(isCount)) {
+        evidence.scheduler = {requested:scheduler.requested,callbacks:scheduler.callbacks,pending:scheduler.pending,
+          lastCallbackAtMs:Number.isFinite(scheduler.lastCallbackAtMs) && scheduler.lastCallbackAtMs >= 0 ? Math.min(scheduler.lastCallbackAtMs,86400000) : null,
+          documentVisibility:['visible','hidden','prerender'].includes(scheduler.documentVisibility) ? scheduler.documentVisibility : 'unknown'};
+      }
       const screenshot = captureImage && typeof p.screenshot === 'string' && p.screenshot.startsWith('data:image/jpeg;base64,') && p.screenshot.length <= 1000000 ? p.screenshot : null;
       lastSnapshot = {evidence, screenshot, loadPending:p.loadPending === true};
       return true;
@@ -442,7 +534,7 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
         scriptPolicy,
         infrastructureErrorOther:moduleLoad || libraryResource || contextUnavailable,
         infrastructureFailure:moduleLoad ? 'module-load' : libraryResource ? 'resource' : null,
-        codeError:observed.some(item => ['script','promise','console','policy'].includes(item.kind)),
+        codeError:observed.some(item => ['script','promise','console','policy','webgl-error'].includes(item.kind)),
       };
     };
     const resultFromSnapshot = (timedOut = false) => {
@@ -450,9 +542,11 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
       const diagnostics = classifyDiagnostics();
       const errors = observed.map(item => item.message);
       const warnings = [];
-      if (timedOut) {
+      const noDraw = evidence?.webglContexts > 0 && evidence.drawCalls === 0;
+      if (timedOut && !noDraw) {
         errors.push('Сцена не завершила запуск за отведённое время. Проверь доступность Three.js и работу браузера.');
-      } else if (evidence) {
+      }
+      if ((!timedOut || noDraw) && evidence) {
         if (evidence.canvasCount === 0) errors.push('В сцене не появился canvas для 3D-рендеринга.');
         else if (evidence.visibleCanvasCount === 0) errors.push('Canvas сцены не имеет видимого размера.');
         // Don't turn a failed module download into a misleading scene-code
@@ -468,7 +562,7 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
       if (!timedOut && lastSnapshot?.loadPending) warnings.push('Сцена уже рисует, но загрузка документа ещё не завершена; ошибки продолжают отслеживаться.');
       // A timeout without a real code error is not a reason to regenerate the
       // whole scene. Keep prior exceptions and context-loss semantics intact.
-      const startupTimeout = timedOut && !diagnostics.codeError && !diagnostics.contextLost && !diagnostics.infrastructureErrorOther;
+      const startupTimeout = timedOut && !noDraw && !diagnostics.codeError && !diagnostics.contextLost && !diagnostics.infrastructureErrorOther;
       const infrastructureErrorOther = diagnostics.infrastructureErrorOther || startupTimeout;
       return {
         ok:errors.length === 0,
@@ -479,6 +573,8 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
         infrastructureFailure:diagnostics.infrastructureFailure || (startupTimeout ? 'startup-timeout' : null),
         diagnostics:observed.map(item => ({...item})),
         evidence, screenshot, phase, documentReadyState, timedOut,
+        activeValidationMs:Math.max(0, Math.round(timeout - remainingMs + (activeAt === null ? 0 : clockNow() - activeAt))),
+        wallValidationMs:Math.max(0, Math.round(clockNow() - startedAt)),
       };
     };
     const onMessage = event => {
@@ -496,7 +592,8 @@ export function validateScene({iframe, html, signal, timeoutMs = 15000, settleMs
     latestSessions.set(iframe, releaseSession);
     window.addEventListener('message', onMessage);
     signal?.addEventListener('abort', onAbort, {once:true});
-    timer = setTimeout(() => finish(resultFromSnapshot(true)), timeout);
+    parentDocument?.addEventListener?.('visibilitychange', onVisibilityChange);
+    armDeadline();
     iframe.srcdoc = srcdoc;
   });
 }

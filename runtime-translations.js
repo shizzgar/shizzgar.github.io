@@ -1,6 +1,10 @@
 // Exact shell messages only. Arbitrary model output, code and device names must
 // remain untouched. Dynamic patterns capture values without interpreting them.
 export const runtimeTranslations = {
+  'WebGL-контекст создан, но ожидающие requestAnimationFrame не выполнили ни одного callback после восстановления запуска. Обеспечь первый renderer.render(scene, camera) сразу после построения сцены и настройки камеры, затем запускай анимационный цикл. Сохрани исходную сцену и её возможности.':'The WebGL context was created, but pending requestAnimationFrame callbacks have not run after startup recovery. Render the first frame with renderer.render(scene, camera) immediately after building the scene and configuring the camera, then start the animation loop. Preserve the original scene and its features.',
+  'Callback анимации выполнялся, но WebGL draw-вызовов не обнаружено даже после повторного запуска. Проверь вызов renderer.render(scene, camera), камеру, видимость объектов и начало цикла; выполни первый render после построения сцены. Сохрани исходную сцену и её возможности.':'Animation callbacks ran, but no WebGL draw calls were observed after restarting. Check renderer.render(scene, camera), the camera, object visibility and loop startup; render the first frame after building the scene. Preserve the original scene and its features.',
+  'WebGL-контекст доступен, но первый кадр не нарисован после повторного запуска. Проверь запуск renderer.render(scene, camera), камеру и видимость объектов; выполни первый render сразу после построения сцены, затем запускай анимацию. Сохрани исходную сцену и её возможности.':'The WebGL context is available, but no first frame was rendered after restarting. Check renderer.render(scene, camera), the camera and object visibility; render the first frame immediately after building the scene, then start animation. Preserve the original scene and its features.',
+  'Проверка отрисовки не завершена: документ был скрыт. Сохрани HTML и повтори проверку в активной вкладке; отсутствие кадра в фоне не доказывает ошибку сцены.':'Rendering validation did not finish because the document was hidden. Retain the HTML and recheck in an active tab; a missing background frame does not establish a scene-code error.',
   'Сцена не завершила запуск за отведённое время. Проверь доступность Three.js и работу браузера.':'The scene did not finish starting in time. Check Three.js availability and the browser.',
   'Сцена уже рисует, но загрузка документа ещё не завершена; ошибки продолжают отслеживаться.':'The scene is rendering while the document is still loading; runtime errors remain monitored.',
   'Не удалось загрузить или связать модульный скрипт или его зависимости. Браузер не передал подробности ошибки импорта.':'The module script or its dependencies could not be loaded or linked. The browser did not provide import error details.',
@@ -63,6 +67,7 @@ export const runtimeTranslations = {
   'Совместимый движок WASM (jsDelivr)': 'Compatibility WASM runtime (jsDelivr)',
   'Адрес доступен. Нужен в некоторых браузерах, файл не скачивался.': 'The address is reachable. This runtime is needed in some browsers; the file was not downloaded.',
   '3D-библиотека Three.js (cdnjs)': 'Three.js 3D library (cdnjs)',
+  '3D-библиотека Three.js (этот сайт)': 'Three.js 3D library (this site)',
   'Время ожидания истекло.': 'The request timed out.',
   'Сеть или политика CORS не позволила выполнить запрос.': 'The network or CORS policy prevented the request.',
   'Не удалось выполнить запрос': 'The request failed',
@@ -169,6 +174,7 @@ const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Captures contain filenames, device identifiers, numbers or raw error details.
 // Translators preserve those values verbatim.
 export const runtimePatterns = [
+  [/^WebGL: (INVALID_ENUM|INVALID_VALUE|INVALID_OPERATION|OUT_OF_MEMORY|INVALID_FRAMEBUFFER_OPERATION|CONTEXT_LOST_WEBGL|UNKNOWN_ERROR) \((\d{1,8})\)\. Ошибка зафиксирована после запуска сцены\.$/, (name, code) => `WebGL: ${name} (${code}). The error was observed after scene startup.`],
   [/^Не удалось загрузить ресурс: ([\s\S]+)$/, source => `Could not load resource: ${source}`],
   [/^Не удалось загрузить или связать модульный скрипт: ([\s\S]+)\. Браузер не передал подробности ошибки импорта\.$/, source => `Could not load or link the module script: ${source}. The browser did not provide import error details.`],
   [/^Политика выполнения сцены заблокировала скрипт \(([^)]+)\): ([\s\S]+)\. Используй встроенный код и только разрешённый модуль Three\.js core ([\s\S]+); не используй другие импорты, eval или new Function\.$/, (directive, source, library) => `The scene execution policy blocked a script (${directive}): ${source}. Use inline code and only the allowed Three.js core module ${library}; avoid other imports, eval or new Function.`],

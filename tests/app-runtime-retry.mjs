@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {runAgent} from '../agent-loop.js';
+import {planValidationRecovery} from '../recovery-policy.js';
 
 // Execute the production app validator with lifecycle adapters. The agent loop
 // is real: a runtime retry must not consume a model repair or overlap its GPU.
@@ -20,7 +21,8 @@ function harness(outcomes, {abortOnRetry = false} = {}) {
   const selected = {frame:null}, session = {}, status = {}, controller = new AbortController();
   let loaded = true;
   const sandbox = vm.createContext({
-    DOMException,
+    DOMException, planValidationRecovery,
+    waitForVisibleDocument:async()=>{}, closeModelSettings(){}, setWorkspaceView(){},
     trace:{
       toolStart(name, input) { traces.push({type:'tool-start',name,input}); return traces.length; },
       toolFinish(id, result) { traces.push({type:'tool-finish',id,result}); },
@@ -40,7 +42,7 @@ function harness(outcomes, {abortOnRetry = false} = {}) {
       return next;
     },
     async probeWebGLRecovery() { calls.push('webgl-probe');return {state:'unavailable'}; },
-    activeScene:null,ui:{'preview-frame':null},setShellText(node,text) { node.textContent=text; },error() {},queueLateRepair() {},
+    activeScene:null,ui:{'preview-frame':null,'preview-status':{}},setShellText(node,text) { node.textContent=text; },error() {},queueLateRepair() {},
   });
   vm.runInContext(`${validatorSource}\nthis.makeValidator = agentValidator;`,sandbox);
   const validate=sandbox.makeValidator({status,session,selected});

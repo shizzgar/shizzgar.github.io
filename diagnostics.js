@@ -39,8 +39,8 @@ const CHECKS = [
     async validate() { return 'Адрес доступен. Нужен в некоторых браузерах, файл не скачивался.'; },
   },
   {
-    id: 'three', label: '3D-библиотека Three.js (cdnjs)', method: 'HEAD',
-    url: 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js',
+    id: 'three', label: '3D-библиотека Three.js (этот сайт)', method: 'HEAD',
+    url: new URL('./vendor/three-r160.module.min.js', import.meta.url).href,
     async validate() { return 'Проверка адреса прошла; файл не скачивался.'; },
   },
   {
